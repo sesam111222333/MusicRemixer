@@ -1,6 +1,6 @@
 # StemDeck
 
-If you like StemDeck and find it useful, consider [buying me a coffee ☕](https://buymeacoffee.com/tha.les).
+If you like StemDeck and find it useful, consider [tipping the maker](https://buymeacoffee.com/tha.les), these will always go to random acts of kindness towards others.
 
 ![StemDeck](stemdeck.png)
 
