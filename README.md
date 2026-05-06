@@ -1,7 +1,5 @@
 # StemDeck
 
-[![status-badge](https://ci.popchores.app/api/badges/2/status.svg?events=push%2Crelease%2Cpull_request_metadata%2Cpull_request_closed%2Cpull_request)](https://ci.popchores.app/repos/2)
-
 If you like StemDeck and find it useful, consider [buying me a coffee ☕](https://buymeacoffee.com/tha.les).
 
 ![StemDeck](stemdeck.png)
@@ -205,3 +203,6 @@ You, the user running this software, are solely responsible for how you use it, 
 - Following the licenses of the underlying tools and models (yt-dlp, Demucs, FFmpeg, PyTorch, etc.).
 
 The author(s) of StemDeck provide this code "as is", without warranty of any kind, and accept no responsibility or liability for how it is used. If you're unsure whether a particular use is allowed in your jurisdiction, consult a lawyer before proceeding.
+
+
+[![Star History Chart](https://www.startrail.dev/embed?repos=thcp/stemdeck)](https://www.startrail.dev?repos=thcp/stemdeck)
