@@ -35,6 +35,7 @@ htmlcov/
 .tox/
 
 # Runtime job artifacts (downloaded audio + separated stems)
+data/
 jobs/
 .run/
 
