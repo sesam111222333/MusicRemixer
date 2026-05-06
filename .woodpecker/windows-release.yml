@@ -1,0 +1,32 @@
+when:
+  - event: release
+
+depends_on:
+  - ci
+
+labels:
+  hostname: windows
+  platform: windows/amd64
+  backend: local
+
+steps:
+  build-windows-portable:
+    image: powershell
+    commands:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/make-portable.ps1
+
+  upload-windows-zip:
+    image: powershell
+    environment:
+      GH_TOKEN:
+        from_secret: github_token
+    commands:
+      - |
+        if (-not $env:CI_COMMIT_TAG) {
+          throw "CI_COMMIT_TAG is required to upload a release asset."
+        }
+      - |
+        if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+          throw "GitHub CLI is required on the Windows agent to upload release assets."
+        }
+      - gh release upload "$env:CI_COMMIT_TAG" "dist/StemDeck-Windows-x64.zip" "dist/StemDeck-Windows-x64.zip.sha256" --repo "thcp/stemdeck" --clobber

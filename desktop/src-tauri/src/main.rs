@@ -230,15 +230,10 @@ fn ensure_torch_device() -> Result<GpuSetup, String> {
 }
 
 fn persist_torch_device(data_dir: &std::path::Path, device: &str) {
-    let config_path = data_dir.join("config.json");
-    let Ok(text) = fs::read_to_string(&config_path) else { return };
-    let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&text) else { return };
-    if let Some(obj) = val.as_object_mut() {
-        obj.insert("torchDevice".to_string(), serde_json::Value::String(device.to_string()));
-        if let Ok(updated) = serde_json::to_string_pretty(&val) {
-            let _ = fs::write(&config_path, updated + "\n");
-        }
-    }
+    let _ = update_setup_config(
+        data_dir,
+        [("torchDevice", serde_json::Value::String(device.to_string()))],
+    );
 }
 
 fn nvidia_smi_exe() -> &'static str {
@@ -285,7 +280,12 @@ fn parse_cuda_version(smi_output: &str) -> Option<String> {
     for line in smi_output.lines() {
         if let Some(pos) = line.find("CUDA Version:") {
             let rest = &line[pos + "CUDA Version:".len()..];
-            let v = rest.trim().split_whitespace().next()?.trim_matches('|').trim();
+            let v = rest
+                .trim()
+                .split_whitespace()
+                .next()?
+                .trim_matches('|')
+                .trim();
             if !v.is_empty() && v != "N/A" {
                 return Some(v.to_string());
             }
@@ -308,7 +308,10 @@ fn cuda_tag(cuda_version: &str) -> &'static str {
 }
 
 fn cuda_index_url(cuda_version: &str) -> String {
-    format!("https://download.pytorch.org/whl/{}", cuda_tag(cuda_version))
+    format!(
+        "https://download.pytorch.org/whl/{}",
+        cuda_tag(cuda_version)
+    )
 }
 
 fn cuda_tag_from_url(index_url: &str) -> &str {
@@ -332,10 +335,15 @@ fn install_cuda_torch(python: &Path, index_url: &str) -> Result<(), String> {
     // has no RECORD file. --no-deps: only replace torch/torchaudio wheels.
     let output = Command::new(python)
         .args([
-            "-m", "pip", "install",
-            &torch_spec, &torchaudio_spec,
-            "--index-url", index_url,
-            "--ignore-installed", "--no-deps",
+            "-m",
+            "pip",
+            "install",
+            &torch_spec,
+            &torchaudio_spec,
+            "--index-url",
+            index_url,
+            "--ignore-installed",
+            "--no-deps",
             "--quiet",
         ])
         .stdout(Stdio::null())
@@ -353,7 +361,10 @@ fn install_cuda_torch(python: &Path, index_url: &str) -> Result<(), String> {
 
 fn verify_cuda_torch(python: &Path) -> bool {
     Command::new(python)
-        .args(["-c", "import torch; exit(0 if torch.cuda.is_available() else 1)"])
+        .args([
+            "-c",
+            "import torch; exit(0 if torch.cuda.is_available() else 1)",
+        ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -422,6 +433,7 @@ fn python_path(root: &Path) -> Option<PathBuf> {
     }
     let candidates = if cfg!(windows) {
         vec![
+            root.join("python").join("Scripts").join("python.exe"),
             root.join("python").join("python.exe"),
             root.join(".venv").join("Scripts").join("python.exe"),
         ]
@@ -559,7 +571,13 @@ fn download_file_with_powershell(url: &str, target: &Path) -> Result<(), String>
     );
     let mut command = Command::new("powershell.exe");
     command
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     hide_console_window(&mut command);
@@ -652,22 +670,56 @@ fn verify_ffmpeg(path: &Path) -> Result<(), String> {
 }
 
 fn write_setup_config(data_dir: &Path, ffmpeg: &Path) -> Result<(), String> {
-    let config_path = data_dir.join("config.json");
     let ffprobe = ffprobe_path(data_dir);
     let updated_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default();
-    let config = serde_json::json!({
-        "setupVersion": SETUP_VERSION,
-        "ffmpegReady": true,
-        "ffmpegPath": ffmpeg.display().to_string(),
-        "ffprobeReady": ffprobe.is_file(),
-        "ffprobePath": ffprobe.display().to_string(),
-        "ffmpegSource": env::var("STEMDECK_FFMPEG_URL").unwrap_or_else(|_| DEFAULT_WINDOWS_FFMPEG_URL.to_string()),
-        "modelReady": false,
-        "updatedAt": updated_at
-    });
+    update_setup_config(
+        data_dir,
+        [
+            ("setupVersion", serde_json::json!(SETUP_VERSION)),
+            ("ffmpegReady", serde_json::json!(true)),
+            (
+                "ffmpegPath",
+                serde_json::json!(ffmpeg.display().to_string()),
+            ),
+            ("ffprobeReady", serde_json::json!(ffprobe.is_file())),
+            (
+                "ffprobePath",
+                serde_json::json!(ffprobe.display().to_string()),
+            ),
+            (
+                "ffmpegSource",
+                serde_json::json!(env::var("STEMDECK_FFMPEG_URL")
+                    .unwrap_or_else(|_| DEFAULT_WINDOWS_FFMPEG_URL.to_string())),
+            ),
+            ("updatedAt", serde_json::json!(updated_at)),
+        ],
+    )
+}
+
+fn update_setup_config<const N: usize>(
+    data_dir: &Path,
+    entries: [(&str, serde_json::Value); N],
+) -> Result<(), String> {
+    let config_path = data_dir.join("config.json");
+    let mut config = fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .filter(|value| value.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let Some(object) = config.as_object_mut() else {
+        return Err("setup config is not a JSON object".to_string());
+    };
+    for (key, value) in entries {
+        object.insert(key.to_string(), value);
+    }
+    object
+        .entry("modelReady".to_string())
+        .or_insert(serde_json::Value::Bool(false));
+
     let body = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("failed to serialize setup config: {e}"))?;
     fs::write(&config_path, body + "\n")
