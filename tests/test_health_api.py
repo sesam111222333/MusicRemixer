@@ -14,4 +14,6 @@ def test_health_endpoints_report_ok():
             assert body["name"] == "StemDeck"
             assert body["status"] == "ok"
             assert body["version"]
-            assert body["jobs_dir"]
+            assert "ffmpeg_configured" in body
+            assert "jobs_dir" not in body
+            assert "data_dir" not in body
