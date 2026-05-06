@@ -4,7 +4,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from app.core.config import JOBS_DIR
+from app.core.config import JOBS_DIR, ffmpeg_executable
 from app.core.models import Job
 from app.pipeline.download import _set
 
@@ -188,7 +188,7 @@ def _load_audio_ffmpeg(
         return None
 
     cmd = [
-        "ffmpeg",
+        ffmpeg_executable(),
         "-nostdin",
         "-loglevel",
         "error",

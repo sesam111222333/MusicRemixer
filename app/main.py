@@ -6,7 +6,16 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from app.api.router import router
-from app.core.config import DEMUCS_DEVICE, DEMUCS_MODEL, JOBS_DIR, STATIC_DIR
+from app.core.config import (
+    DATA_DIR,
+    DEMUCS_DEVICE,
+    DEMUCS_MODEL,
+    FFMPEG_BIN,
+    JOBS_DIR,
+    STATIC_DIR,
+    configure_portable_environment,
+    ensure_runtime_dirs,
+)
 
 # Show our INFO-level logs through uvicorn's root handler. Without this,
 # Python's default root level (WARNING) silently drops every
@@ -14,6 +23,8 @@ from app.core.config import DEMUCS_DEVICE, DEMUCS_MODEL, JOBS_DIR, STATIC_DIR
 # diagnostics ("chroma:", "key candidates:").
 logging.getLogger("stemdeck").setLevel(logging.INFO)
 logging.getLogger("stemdeck").info("demucs config: model=%s device=%s", DEMUCS_MODEL, DEMUCS_DEVICE)
+
+configure_portable_environment()
 
 # Pre-import librosa so the first job submission doesn't pay the 1-2 s
 # cost of numpy/scipy/numba lazy initialization. Adds ~1 s to server
@@ -25,6 +36,25 @@ except ImportError:
     pass
 
 app = FastAPI(title="StemDeck")
+
+
+@app.get("/health", include_in_schema=False)
+def health_root() -> dict[str, object]:
+    return health()
+
+
+@app.get("/api/health", tags=["health"])
+def health() -> dict[str, object]:
+    return {
+        "name": "StemDeck",
+        "status": "ok",
+        "version": "0.1.0",
+        "data_dir": str(DATA_DIR),
+        "jobs_dir": str(JOBS_DIR),
+        "ffmpeg_configured": FFMPEG_BIN.is_file(),
+        "demucs_model": DEMUCS_MODEL,
+        "demucs_device": DEMUCS_DEVICE,
+    }
 
 
 # Force browsers to revalidate static assets on every request. Without
@@ -43,6 +73,6 @@ async def no_cache_static(request: Request, call_next):
 app.include_router(router, prefix="/api")
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
-# Ensure the jobs directory exists at startup (module-level side effect
+# Ensure runtime directories exist at startup (module-level side effect
 # moved from the old monolithic main.py; this is the canonical entrypoint).
-JOBS_DIR.mkdir(exist_ok=True)
+ensure_runtime_dirs()

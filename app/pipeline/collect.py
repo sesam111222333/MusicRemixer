@@ -6,7 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from app.core.config import DEMUCS_MODEL, JOB_TTL_SECONDS, STEM_NAMES
+from app.core.config import DEMUCS_MODEL, JOB_TTL_SECONDS, STEM_NAMES, ffmpeg_executable
 from app.core.models import Job
 from app.core.registry import all_jobs as registry_all
 from app.core.registry import remove as registry_remove
@@ -97,7 +97,7 @@ def make_original_track(job: Job, job_dir: Path, stems_dir: Path) -> Path | None
         return None
     out = stems_dir / "original.wav"
     cmd: list[str] = [
-        "ffmpeg",
+        ffmpeg_executable(),
         "-y",
         "-nostdin",
         "-loglevel",
@@ -144,7 +144,7 @@ def make_selected_mix(job: Job, stems_dir: Path, found: list[str]) -> Path | Non
     inputs = [stems_dir / f"{name}.wav" for name in selected]
     out = stems_dir / "mix.wav"
     cmd: list[str] = [
-        "ffmpeg",
+        ffmpeg_executable(),
         "-y",
         "-nostdin",
         "-loglevel",
