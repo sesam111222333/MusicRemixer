@@ -18,12 +18,12 @@ def test_data_dir_moves_default_runtime_dirs(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("STEMDECK_LOGS_DIR", raising=False)
     try:
         reloaded = importlib.reload(config)
-        assert reloaded.DATA_DIR == data_dir.resolve()
-        assert reloaded.JOBS_DIR == data_dir.resolve() / "jobs"
-        assert reloaded.CACHE_DIR == data_dir.resolve() / "cache"
-        assert reloaded.DOWNLOADS_DIR == data_dir.resolve() / "downloads"
-        assert reloaded.MODELS_DIR == data_dir.resolve() / "models"
-        assert reloaded.LOGS_DIR == data_dir.resolve() / "logs"
+        assert data_dir.resolve() == reloaded.DATA_DIR
+        assert data_dir.resolve() / "jobs" == reloaded.JOBS_DIR
+        assert data_dir.resolve() / "cache" == reloaded.CACHE_DIR
+        assert data_dir.resolve() / "downloads" == reloaded.DOWNLOADS_DIR
+        assert data_dir.resolve() / "models" == reloaded.MODELS_DIR
+        assert data_dir.resolve() / "logs" == reloaded.LOGS_DIR
     finally:
         monkeypatch.delenv("STEMDECK_DATA_DIR", raising=False)
         importlib.reload(original)
@@ -39,8 +39,8 @@ def test_jobs_dir_override_wins_over_data_dir(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("STEMDECK_JOBS_DIR", str(jobs_dir))
     try:
         reloaded = importlib.reload(config)
-        assert reloaded.DATA_DIR == data_dir.resolve()
-        assert reloaded.JOBS_DIR == jobs_dir.resolve()
+        assert data_dir.resolve() == reloaded.DATA_DIR
+        assert jobs_dir.resolve() == reloaded.JOBS_DIR
     finally:
         monkeypatch.delenv("STEMDECK_DATA_DIR", raising=False)
         monkeypatch.delenv("STEMDECK_JOBS_DIR", raising=False)
