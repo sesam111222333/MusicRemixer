@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from app.api.router import router
 from app.core.config import (
-    DATA_DIR,
     DEMUCS_DEVICE,
     DEMUCS_MODEL,
     FFMPEG_BIN,
@@ -16,6 +18,7 @@ from app.core.config import (
     configure_portable_environment,
     ensure_runtime_dirs,
 )
+from app.pipeline.collect import sweep_old_jobs
 
 # Show our INFO-level logs through uvicorn's root handler. Without this,
 # Python's default root level (WARNING) silently drops every
@@ -35,7 +38,25 @@ try:
 except ImportError:
     pass
 
-app = FastAPI(title="StemDeck")
+_log = logging.getLogger("stemdeck")
+
+
+async def _sweep_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(sweep_old_jobs, JOBS_DIR)
+        except Exception:
+            _log.warning("sweep failed", exc_info=True)
+        await asyncio.sleep(3600)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    asyncio.create_task(_sweep_loop())
+    yield
+
+
+app = FastAPI(title="StemDeck", lifespan=lifespan)
 
 
 @app.get("/health", include_in_schema=False)
@@ -49,8 +70,6 @@ def health() -> dict[str, object]:
         "name": "StemDeck",
         "status": "ok",
         "version": "0.1.0",
-        "data_dir": str(DATA_DIR),
-        "jobs_dir": str(JOBS_DIR),
         "ffmpeg_configured": FFMPEG_BIN.is_file(),
         "demucs_model": DEMUCS_MODEL,
         "demucs_device": DEMUCS_DEVICE,

@@ -15,6 +15,15 @@ from app.core.registry import set_proc
 logger = logging.getLogger("stemdeck.collect")
 
 
+def _rmtree(path: Path) -> None:
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        logger.warning("failed to remove %s", path, exc_info=True)
+
+
 def _run_ffmpeg(job: Job, cmd: list[str]) -> bool:
     """Run an ffmpeg command, registering the subprocess with the job
     registry so POST /api/jobs/{id}/cancel can terminate it. Returns
@@ -65,7 +74,7 @@ def collect(job: Job, stems_root: Path, job_dir: Path) -> list[str]:
         if src.exists():
             shutil.move(str(src), target_dir / f"{name}.wav")
             found.append(name)
-    shutil.rmtree(job_dir / DEMUCS_MODEL, ignore_errors=True)
+    _rmtree(job_dir / DEMUCS_MODEL)
     if not found:
         raise RuntimeError("no stems produced by demucs")
     return found
@@ -188,5 +197,5 @@ def sweep_old_jobs(jobs_dir: Path) -> None:
                 continue
         elif d.stat().st_mtime >= cutoff:
             continue
-        shutil.rmtree(d, ignore_errors=True)
+        _rmtree(d)
         registry_remove(d.name)
