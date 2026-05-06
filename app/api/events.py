@@ -25,7 +25,7 @@ async def job_events(job_id: str) -> StreamingResponse:
     async def stream() -> AsyncIterator[str]:
         last = None
         keepalive_at = 0
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         deadline = loop.time() + _MAX_SSE_SECONDS
         while loop.time() < deadline:
             snapshot = job.to_state()
