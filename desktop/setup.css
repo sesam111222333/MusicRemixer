@@ -81,31 +81,41 @@ h1 {
   gap: 12px;
   min-height: 42px;
   padding: 0 14px;
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.08);
   border-radius: 8px;
   background: rgba(3, 10, 15, 0.34);
-  color: var(--muted);
+  color: rgba(154, 163, 173, 0.45); /* dimmed — queued */
+  transition: color 240ms ease, border-color 240ms ease;
 }
 
+/* pending: small hollow ring, barely visible */
 .setup-steps li::before {
   content: "";
+  flex: 0 0 auto;
   width: 12px;
   height: 12px;
-  border: 1px solid currentColor;
+  border: 1.5px solid currentColor;
   border-radius: 50%;
+  opacity: 0.5;
 }
 
+/* active: gold spinning ring */
 .setup-steps li.active {
   color: var(--gold);
+  border-color: rgba(216, 168, 74, 0.22);
 }
 
 .setup-steps li.active::before {
+  opacity: 1;
+  border-color: var(--gold);
   border-top-color: transparent;
-  animation: spin 900ms linear infinite;
+  animation: spin 750ms linear infinite;
 }
 
+/* done: bright green ✓ */
 .setup-steps li.done {
   color: var(--ok);
+  border-color: rgba(84, 197, 104, 0.18);
 }
 
 .setup-steps li.done::before {
@@ -113,10 +123,27 @@ h1 {
   width: auto;
   height: auto;
   border: 0;
+  opacity: 1;
+  font-size: 14px;
+  line-height: 1;
+  animation: none;
 }
 
+/* error: red ✗ */
 .setup-steps li.error {
   color: var(--err);
+  border-color: rgba(239, 79, 88, 0.25);
+}
+
+.setup-steps li.error::before {
+  content: "✗";
+  width: auto;
+  height: auto;
+  border: 0;
+  opacity: 1;
+  font-size: 14px;
+  line-height: 1;
+  animation: none;
 }
 
 .status {

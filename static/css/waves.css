@@ -809,7 +809,7 @@
       clamp(340px, calc((var(--visible-track-count, 6) * 70px) + 112px), 650px),
       clamp(360px, calc((var(--visible-track-count, 6) * 78px) + 128px), 720px)
     )
-    minmax(820px, 1fr);
+    minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) minmax(74px, 86px);
   gap: 10px;
   min-height: 0;
@@ -836,16 +836,20 @@
   grid-column: 2;
   grid-row: 1;
   min-height: 0;
-  padding: 10px 12px;
+  padding: 6px 12px;
   overflow: hidden;
 }
 
 .app:not(.is-import) .stems-panel {
   grid-column: 2;
   grid-row: 1;
-  align-self: stretch;
+  align-self: start;
   width: 48px;
-  margin: 68px 0 10px 12px;
+  /* 6px panel padding + 32px toolbar + 34px ruler = 72px */
+  margin: 72px 0 0 12px;
+  /* exactly as tall as the visible lane stack */
+  height: calc(var(--visible-track-count, 6) * 48px);
+  overflow: hidden;
   padding: 0;
   border: 0;
   background: transparent;
@@ -874,10 +878,6 @@
   place-items: center;
   gap: 0;
   color: var(--stem-color);
-}
-
-.app:not(.is-import) .stem-list span.hidden {
-  display: none;
 }
 
 .app:not(.is-import) .stem-list .drag-handle,

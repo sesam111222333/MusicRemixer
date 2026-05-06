@@ -32,6 +32,8 @@ struct RuntimeProbe {
     python_ready: bool,
     ffmpeg_path: Option<String>,
     ffmpeg_ready: bool,
+    /// Persisted from previous setup run; None means GPU step hasn't run yet.
+    torch_device: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -47,6 +49,16 @@ struct AssetStatus {
     model_ready: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GpuSetup {
+    gpu_detected: bool,
+    gpu_name: Option<String>,
+    cuda_version: Option<String>,
+    torch_device: String,
+    cuda_verified: bool,
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(BackendState::default())
@@ -54,6 +66,7 @@ fn main() {
             probe_runtime,
             ensure_workspace,
             ensure_external_assets,
+            ensure_torch_device,
             start_backend,
         ])
         .build(tauri::generate_context!())
@@ -72,6 +85,7 @@ fn probe_runtime() -> Result<RuntimeProbe, String> {
     let data_dir = root.join("data");
     let python = python_path(&root);
     let ffmpeg = ffmpeg_path(&data_dir);
+    let torch_device = read_config_str(&data_dir, "torchDevice");
     Ok(RuntimeProbe {
         app_root: root.display().to_string(),
         data_dir: data_dir.display().to_string(),
@@ -79,7 +93,15 @@ fn probe_runtime() -> Result<RuntimeProbe, String> {
         python_path: python.map(|p| p.display().to_string()),
         ffmpeg_ready: ffmpeg.as_ref().is_some_and(|p| p.is_file()),
         ffmpeg_path: ffmpeg.map(|p| p.display().to_string()),
+        torch_device,
     })
+}
+
+/// Read a single string field from data/config.json, returning None on any error.
+fn read_config_str(data_dir: &std::path::Path, key: &str) -> Option<String> {
+    let text = fs::read_to_string(data_dir.join("config.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    value.get(key)?.as_str().map(|s| s.to_string())
 }
 
 #[tauri::command]
@@ -171,6 +193,172 @@ fn start_backend(state: tauri::State<BackendState>) -> Result<BackendStarted, St
     wait_for_health(port, Duration::from_secs(30))?;
     *state.url.lock().map_err(|e| e.to_string())? = Some(url.clone());
     Ok(BackendStarted { url })
+}
+
+#[tauri::command]
+fn ensure_torch_device() -> Result<GpuSetup, String> {
+    let root = app_root()?;
+    let python = python_path(&root)
+        .filter(|p| p.is_file())
+        .ok_or_else(|| "Python not found".to_string())?;
+
+    let setup = match detect_nvidia_gpu() {
+        Some((gpu_name, cuda_version)) => {
+            let index_url = cuda_index_url(&cuda_version);
+            install_cuda_torch(&python, &index_url)?;
+            let cuda_verified = verify_cuda_torch(&python);
+            GpuSetup {
+                gpu_detected: true,
+                gpu_name: Some(gpu_name),
+                cuda_version: Some(cuda_version),
+                torch_device: if cuda_verified { "cuda" } else { "cpu" }.to_string(),
+                cuda_verified,
+            }
+        }
+        None => GpuSetup {
+            gpu_detected: false,
+            gpu_name: None,
+            cuda_version: None,
+            torch_device: "cpu".to_string(),
+            cuda_verified: false,
+        },
+    };
+    // Persist so subsequent launches skip this step entirely.
+    let data_dir = app_root()?.join("data");
+    persist_torch_device(&data_dir, &setup.torch_device);
+    Ok(setup)
+}
+
+fn persist_torch_device(data_dir: &std::path::Path, device: &str) {
+    let config_path = data_dir.join("config.json");
+    let Ok(text) = fs::read_to_string(&config_path) else { return };
+    let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&text) else { return };
+    if let Some(obj) = val.as_object_mut() {
+        obj.insert("torchDevice".to_string(), serde_json::Value::String(device.to_string()));
+        if let Ok(updated) = serde_json::to_string_pretty(&val) {
+            let _ = fs::write(&config_path, updated + "\n");
+        }
+    }
+}
+
+fn nvidia_smi_exe() -> &'static str {
+    // nvidia-smi.exe lives in System32 on Windows but Tauri child processes
+    // inherit a stripped PATH that may not include it.
+    #[cfg(windows)]
+    {
+        const SYSTEM32: &str = r"C:\Windows\System32\nvidia-smi.exe";
+        if std::path::Path::new(SYSTEM32).is_file() {
+            return SYSTEM32;
+        }
+    }
+    "nvidia-smi"
+}
+
+fn detect_nvidia_gpu() -> Option<(String, String)> {
+    let smi = nvidia_smi_exe();
+    let mut cmd = Command::new(smi);
+    cmd.args(["--query-gpu=name", "--format=csv,noheader"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    hide_console_window(&mut cmd);
+    let name_out = cmd.output().ok()?;
+    if !name_out.status.success() {
+        return None;
+    }
+    let gpu_name = String::from_utf8_lossy(&name_out.stdout).trim().to_string();
+    if gpu_name.is_empty() {
+        return None;
+    }
+
+    // Read CUDA version from the standard nvidia-smi header.
+    let mut smi_cmd = Command::new(smi);
+    smi_cmd.stdout(Stdio::piped()).stderr(Stdio::null());
+    hide_console_window(&mut smi_cmd);
+    let smi_out = smi_cmd.output().ok()?;
+    let smi_text = String::from_utf8_lossy(&smi_out.stdout);
+    let cuda_version = parse_cuda_version(&smi_text).unwrap_or_else(|| "12.4".to_string());
+
+    Some((gpu_name, cuda_version))
+}
+
+fn parse_cuda_version(smi_output: &str) -> Option<String> {
+    for line in smi_output.lines() {
+        if let Some(pos) = line.find("CUDA Version:") {
+            let rest = &line[pos + "CUDA Version:".len()..];
+            let v = rest.trim().split_whitespace().next()?.trim_matches('|').trim();
+            if !v.is_empty() && v != "N/A" {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn cuda_tag(cuda_version: &str) -> &'static str {
+    let parts: Vec<u32> = cuda_version
+        .splitn(2, '.')
+        .filter_map(|p| p.parse().ok())
+        .collect();
+    match parts.as_slice() {
+        [12, minor] if *minor >= 4 => "cu124",
+        [12, _] => "cu121",
+        [11, _] => "cu118",
+        _ => "cu124",
+    }
+}
+
+fn cuda_index_url(cuda_version: &str) -> String {
+    format!("https://download.pytorch.org/whl/{}", cuda_tag(cuda_version))
+}
+
+fn cuda_tag_from_url(index_url: &str) -> &str {
+    index_url.rsplit('/').next().unwrap_or("cu124")
+}
+
+fn install_cuda_torch(python: &Path, index_url: &str) -> Result<(), String> {
+    // Skip only when CUDA torch is already active — torch.version.cuda is
+    // None for CPU-only wheels, so this correctly re-installs when needed.
+    if verify_cuda_torch(python) {
+        return Ok(());
+    }
+
+    // Use the explicit local-version suffix (e.g. torch==2.6.0+cu124) so pip
+    // treats the CUDA wheel as a distinct version from the CPU-only 2.6.0
+    // wheel and doesn't skip the install as "already satisfied".
+    let tag = cuda_tag_from_url(index_url);
+    let torch_spec = format!("torch==2.6.0+{tag}");
+    let torchaudio_spec = format!("torchaudio==2.6.0+{tag}");
+    // --ignore-installed: overwrites even a corrupted/partial install that
+    // has no RECORD file. --no-deps: only replace torch/torchaudio wheels.
+    let output = Command::new(python)
+        .args([
+            "-m", "pip", "install",
+            &torch_spec, &torchaudio_spec,
+            "--index-url", index_url,
+            "--ignore-installed", "--no-deps",
+            "--quiet",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("failed to run pip: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("CUDA torch install failed: {}", stderr.trim()))
+    }
+}
+
+fn verify_cuda_torch(python: &Path) -> bool {
+    Command::new(python)
+        .args(["-c", "import torch; exit(0 if torch.cuda.is_available() else 1)"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 fn stop_backend(state: &BackendState) {
@@ -362,22 +550,16 @@ fn download_windows_ffmpeg(data_dir: &Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn download_file_with_powershell(url: &str, target: &Path) -> Result<(), String> {
-    let script = concat!(
-        "$ProgressPreference = 'SilentlyContinue'; ",
-        "Invoke-WebRequest -Uri $args[0] -OutFile $args[1]"
+    let target_str = target.display().to_string();
+    // Embed url and path directly — PowerShell 5.1 -Command consumes the
+    // entire remaining argv, so $args[] is always empty when passed this way.
+    let script = format!(
+        "$ProgressPreference = 'SilentlyContinue'; \
+         Invoke-WebRequest -Uri '{url}' -OutFile '{target_str}'"
     );
-    let target_arg = target.display().to_string();
     let mut command = Command::new("powershell.exe");
     command
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-            url,
-            &target_arg,
-        ])
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     hide_console_window(&mut command);
@@ -414,7 +596,7 @@ fn extract_ffmpeg_binaries(archive_path: &Path, data_dir: &Path) -> Result<(), S
         if !entry.is_file() {
             continue;
         }
-        let Some(name) = entry.enclosed_name().map(Path::to_path_buf) else {
+        let Some(name) = entry.enclosed_name() else {
             continue;
         };
         let Some(file_name) = name.file_name().and_then(|value| value.to_str()) else {
