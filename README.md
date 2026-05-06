@@ -205,4 +205,4 @@ You, the user running this software, are solely responsible for how you use it, 
 The author(s) of StemDeck provide this code "as is", without warranty of any kind, and accept no responsibility or liability for how it is used. If you're unsure whether a particular use is allowed in your jurisdiction, consult a lawyer before proceeding.
 
 
-[![Star History Chart](https://www.startrail.dev/embed?repos=thcp/stemdeck)](https://www.startrail.dev?repos=thcp/stemdeck)
+[![Star History Chart](https://api.star-history.com/svg?repos=thcp/stemdeck&type=Date)](https://star-history.com/#thcp/stemdeck)
