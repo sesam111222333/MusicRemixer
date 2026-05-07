@@ -6,7 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from app.core.config import DEMUCS_MODEL, JOB_TTL_SECONDS, STEM_NAMES
+from app.core.config import JOB_TTL_SECONDS
 from app.core.models import Job
 from app.core.registry import all_jobs as registry_all
 from app.core.registry import remove as registry_remove
@@ -53,21 +53,25 @@ _TERMINAL = frozenset(("done", "error", "cancelled"))
 
 
 def collect(job: Job, stems_root: Path, job_dir: Path) -> list[str]:
-    """Move Demucs-emitted stems into the job's stems/ dir and clean up
-    the demucs intermediate dir. Does NOT delete the source download --
-    cleanup_source() is called by the runner after any post-processing
-    that needs to re-encode the source (e.g. building original.wav)."""
+    """Move separated stems into the job's stems/ dir and clean up the
+    intermediate separation directory. Works for any backend: Demucs
+    places stems_root inside job_dir/MODEL/source/, BS-RoFormer places
+    it directly inside job_dir/."""
     target_dir = job_dir / "stems"
     target_dir.mkdir(exist_ok=True)
     found: list[str] = []
-    for name in STEM_NAMES:
+    for name in job.stem_names:
         src = stems_root / f"{name}.wav"
         if src.exists():
             shutil.move(str(src), target_dir / f"{name}.wav")
             found.append(name)
-    shutil.rmtree(job_dir / DEMUCS_MODEL, ignore_errors=True)
+    # Demucs: stems_root is job_dir/MODEL/source/ → remove job_dir/MODEL/.
+    # BS-RoFormer: stems_root is job_dir/_bsr_stems/ → remove it directly.
+    cleanup = stems_root if stems_root.parent == job_dir else stems_root.parent
+    if cleanup != job_dir:
+        shutil.rmtree(cleanup, ignore_errors=True)
     if not found:
-        raise RuntimeError("no stems produced by demucs")
+        raise RuntimeError(f"no stems produced by {job.backend}")
     return found
 
 
@@ -90,7 +94,7 @@ def make_original_track(job: Job, job_dir: Path, stems_dir: Path) -> Path | None
 
     Skipped when the user kept all 6 stems (no complement to mix) or
     when none of the unselected stem WAVs are on disk."""
-    unselected = [s for s in STEM_NAMES if s not in job.selected_stems]
+    unselected = [s for s in job.stem_names if s not in job.selected_stems]
     inputs = [stems_dir / f"{name}.wav" for name in unselected]
     inputs = [p for p in inputs if p.exists()]
     if not inputs:

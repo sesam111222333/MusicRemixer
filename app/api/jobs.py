@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.core.config import JOBS_DIR, STEM_NAMES
+from app.core.config import DEFAULT_BACKEND, JOBS_DIR, STEMS_4, STEMS_6
 from app.core.models import Job
 from app.core.registry import get as registry_get
 from app.core.registry import get_proc as registry_get_proc
@@ -26,9 +26,19 @@ _ALLOWED_EXTS = frozenset(
 )
 
 
+_VALID_BACKENDS = frozenset(("demucs", "bsroformer"))
+
+
+def _resolve_backend(raw: str | None) -> str:
+    if raw and raw in _VALID_BACKENDS:
+        return raw
+    return DEFAULT_BACKEND
+
+
 class JobRequest(BaseModel):
     url: str
     stems: list[str] | None = None
+    backend: str | None = None
 
 
 @router.post("")
@@ -37,10 +47,12 @@ async def create_job(payload: JobRequest) -> dict[str, str]:
         url = validate_youtube_url(payload.url)
     except InvalidYouTubeURL as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
-    selected = [s for s in payload.stems if s in STEM_NAMES] if payload.stems else list(STEM_NAMES)
+    backend = _resolve_backend(payload.backend)
+    stem_names = STEMS_4 if backend == "bsroformer" else STEMS_6
+    selected = [s for s in payload.stems if s in stem_names] if payload.stems else list(stem_names)
     if not selected:
-        selected = list(STEM_NAMES)
-    job = registry_register(Job(id=uuid.uuid4().hex[:12], selected_stems=selected))
+        selected = list(stem_names)
+    job = registry_register(Job(id=uuid.uuid4().hex[:12], backend=backend, selected_stems=selected))
     asyncio.create_task(run_pipeline(job, url, JOBS_DIR))
     return {"job_id": job.id}
 
@@ -49,13 +61,16 @@ async def create_job(payload: JobRequest) -> dict[str, str]:
 async def create_job_from_upload(
     file: UploadFile = File(...),
     stems: str | None = Form(None),
+    backend: str | None = Form(None),
 ) -> dict[str, str]:
-    selected = list(STEM_NAMES)
+    resolved_backend = _resolve_backend(backend)
+    stem_names = STEMS_4 if resolved_backend == "bsroformer" else STEMS_6
+    selected = list(stem_names)
     if stems:
         try:
             parsed = json.loads(stems)
             if isinstance(parsed, list):
-                selected = [s for s in parsed if s in STEM_NAMES] or list(STEM_NAMES)
+                selected = [s for s in parsed if s in stem_names] or list(stem_names)
         except (json.JSONDecodeError, TypeError):
             pass
 
@@ -63,7 +78,7 @@ async def create_job_from_upload(
     if ext not in _ALLOWED_EXTS:
         raise HTTPException(status_code=422, detail=f"Unsupported file type: {ext or '(none)'}")
 
-    job = registry_register(Job(id=uuid.uuid4().hex[:12], selected_stems=selected))
+    job = registry_register(Job(id=uuid.uuid4().hex[:12], backend=resolved_backend, selected_stems=selected))
     job.title = Path(file.filename or "upload").stem
 
     job_dir = JOBS_DIR / job.id

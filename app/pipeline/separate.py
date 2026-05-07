@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from app.core.config import DEMUCS_DEVICE, DEMUCS_MODEL
+from app.core.config import BSROFORMER_MODEL, DEMUCS_DEVICE, DEMUCS_MODEL
 from app.core.models import Job, JobCancelled
 from app.core.registry import set_proc
 
@@ -16,6 +17,12 @@ _PCT_RE = re.compile(r"(\d{1,3})%")
 
 
 def separate(job: Job, source: Path, job_dir: Path) -> Path:
+    if job.backend == "bsroformer":
+        return _separate_bsroformer(job, source, job_dir)
+    return _separate_demucs(job, source, job_dir)
+
+
+def _separate_demucs(job: Job, source: Path, job_dir: Path) -> Path:
     from app.pipeline.download import _set
 
     _set(job, status="separating", progress=0.0, stage="Separating stems...")
@@ -43,9 +50,6 @@ def separate(job: Job, source: Path, job_dir: Path) -> Path:
         raise RuntimeError("demucs subprocess has no stderr pipe")
     set_proc(job.id, proc)
 
-    # tqdm uses \r to redraw -- read char-by-char and split on \r or \n.
-    # Keep the last few non-progress lines so we can surface them if demucs
-    # exits non-zero (otherwise the only signal would be a bare exit code).
     buf = ""
     tail: list[str] = []
     try:
@@ -73,9 +77,6 @@ def separate(job: Job, source: Path, job_dir: Path) -> Path:
     finally:
         set_proc(job.id, None)
 
-    # POST /cancel calls proc.terminate() directly, which causes the read loop
-    # above to hit EOF and proc.wait() to return a nonzero status. Translate
-    # that into JobCancelled before the generic "demucs failed" path.
     if job.cancel_requested:
         raise JobCancelled()
     if proc.returncode != 0:
@@ -87,4 +88,152 @@ def separate(job: Job, source: Path, job_dir: Path) -> Path:
     stems_root = job_dir / DEMUCS_MODEL / source.stem
     if not stems_root.is_dir():
         raise RuntimeError(f"demucs output not found at {stems_root}")
+    return stems_root
+
+
+def _run_demucs_on_file(job: Job, source: Path, out_dir: Path, model: str, progress_offset: float) -> Path:
+    """Run demucs on *source*, write output to *out_dir*, report progress
+    scaled to the range [progress_offset, progress_offset + 0.5]."""
+    from app.pipeline.download import _set
+
+    cmd = [
+        sys.executable, "-m", "demucs",
+        "-n", model,
+        "-d", DEMUCS_DEVICE,
+        "-o", str(out_dir),
+        str(source),
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=0,
+    )
+    if proc.stderr is None:
+        raise RuntimeError("demucs subprocess has no stderr pipe")
+    set_proc(job.id, proc)
+
+    buf = ""
+    tail: list[str] = []
+    try:
+        while True:
+            ch = proc.stderr.read(1)
+            if not ch:
+                break
+            if ch in ("\r", "\n"):
+                line = buf.strip()
+                buf = ""
+                if not line:
+                    continue
+                m = _PCT_RE.search(line)
+                if m:
+                    pct = max(0, min(100, int(m.group(1))))
+                    stage_pct = progress_offset + pct / 200.0
+                    _set(job, progress=stage_pct, stage=f"Separating instruments {pct}%")
+                else:
+                    tail.append(line)
+                    if len(tail) > 40:
+                        tail.pop(0)
+            else:
+                buf += ch
+        proc.wait()
+    finally:
+        set_proc(job.id, None)
+
+    if job.cancel_requested:
+        raise JobCancelled()
+    if proc.returncode != 0:
+        detail = "\n".join(tail[-15:]) if tail else "(no stderr captured)"
+        logger.error("demucs (inst stage) exited %s; tail:\n%s", proc.returncode, detail)
+        last = tail[-1] if tail else f"exit status {proc.returncode}"
+        raise RuntimeError(f"demucs (instrument stage) failed: {last}")
+
+    stems_root = out_dir / model / source.stem
+    if not stems_root.is_dir():
+        raise RuntimeError(f"demucs instrument output not found at {stems_root}")
+    return stems_root
+
+
+def _separate_bsroformer(job: Job, source: Path, job_dir: Path) -> Path:
+    """Two-stage separation:
+    1. BS-RoFormer (audio-separator): source → vocals.wav + instrumental.wav
+    2. Demucs htdemucs_ft on the instrumental → drums.wav + bass.wav + other.wav
+
+    Assembles the four stems into job_dir/_bsr_stems/ and returns that path.
+    """
+    from app.pipeline.download import _set
+
+    _set(job, status="separating", progress=0.0, stage="Loading BS-RoFormer model...")
+
+    try:
+        from audio_separator.separator import Separator
+    except ImportError:
+        raise RuntimeError(
+            "audio-separator is not installed. "
+            "Run: pip install audio-separator[gpu] (or audio-separator for CPU-only)"
+        )
+
+    bsr_tmp = job_dir / "_bsr_tmp"
+    bsr_tmp.mkdir(exist_ok=True)
+
+    try:
+        sep = Separator(output_dir=str(bsr_tmp), output_format="WAV", log_level=logging.WARNING)
+    except TypeError:
+        sep = Separator(output_dir=str(bsr_tmp), output_format="WAV")
+
+    sep.load_model(model_filename=BSROFORMER_MODEL)
+
+    _set(job, progress=0.05, stage="Separating vocals...")
+
+    if job.cancel_requested:
+        raise JobCancelled()
+
+    output_files = sep.separate(str(source))
+
+    _set(job, progress=0.45, stage="Vocals done — separating instruments...")
+
+    if job.cancel_requested:
+        raise JobCancelled()
+
+    # Identify vocals and instrumental output files.
+    vocals_path: Path | None = None
+    instrumental_path: Path | None = None
+    for f in output_files:
+        p = Path(f)
+        name_lower = p.name.lower()
+        if "(instrumental)" in name_lower or "(no_vocals)" in name_lower or "(no vocals)" in name_lower:
+            instrumental_path = p
+        elif "(vocals)" in name_lower:
+            vocals_path = p
+
+    if vocals_path is None or instrumental_path is None:
+        raise RuntimeError(
+            f"BS-RoFormer output could not be identified. Got: {[str(f) for f in output_files]}"
+        )
+
+    logger.info("BSR vocals: %s  instrumental: %s", vocals_path.name, instrumental_path.name)
+
+    # Stage 2: Demucs on the instrumental to get drums/bass/other.
+    demucs_tmp = job_dir / "_demucs_tmp"
+    demucs_tmp.mkdir(exist_ok=True)
+    inst_model = "htdemucs_ft"
+
+    inst_stems_root = _run_demucs_on_file(job, instrumental_path, demucs_tmp, inst_model, 0.45)
+
+    # Assemble the four stems into a clean output directory.
+    stems_root = job_dir / "_bsr_stems"
+    stems_root.mkdir(exist_ok=True)
+
+    shutil.copy2(str(vocals_path), stems_root / "vocals.wav")
+    for name in ("drums", "bass", "other"):
+        src = inst_stems_root / f"{name}.wav"
+        if src.exists():
+            shutil.copy2(str(src), stems_root / f"{name}.wav")
+        else:
+            logger.warning("Expected demucs stem missing: %s", src)
+
+    shutil.rmtree(bsr_tmp, ignore_errors=True)
+    shutil.rmtree(demucs_tmp, ignore_errors=True)
+
     return stems_root

@@ -3,7 +3,7 @@ import {
   submitBtn, errorEl, jobBox, jobTitleEl, jobStageEl,
   jobDetailEl, jobCancelBtn, progressEl, titleEl, bpmChip, keyChip,
   eventSource, setEventSource, setCurrentJobId, currentJobId,
-  selectedStems,
+  selectedStems, selectedBackend,
 } from "./state.js";
 import { destroyPlayer } from "./player.js";
 import { wireUpAudio } from "./player.js";
@@ -330,6 +330,7 @@ export function wireJobForm() {
         const fd = new FormData();
         fd.append("file", file);
         fd.append("stems", JSON.stringify([...selectedStems]));
+        fd.append("backend", selectedBackend);
         res = await fetch("/api/jobs/upload", { method: "POST", body: fd });
       } else {
         const postUrlText = document.getElementById("post-url-text");
@@ -337,7 +338,7 @@ export function wireJobForm() {
         res = await fetch("/api/jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: urlInput.value, stems: [...selectedStems] }),
+          body: JSON.stringify({ url: urlInput.value, stems: [...selectedStems], backend: selectedBackend }),
         });
       }
       const data = await res.json();

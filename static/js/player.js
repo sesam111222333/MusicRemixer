@@ -1,7 +1,7 @@
 import Multitrack from "/vendor/multitrack.js";
 import { fmtTime } from "./utils.js";
 import {
-  STEM_NAMES, TRACK_NAMES, STEM_COLORS, PROGRESS_COLOR,
+  TRACK_NAMES, STEM_COLORS, PROGRESS_COLOR,
   LOOP_DEFAULT_START_FRAC, LOOP_DEFAULT_END_FRAC,
 } from "./constants.js";
 import {
@@ -13,7 +13,7 @@ import {
   masterVolume, masterFader, mixerState,
   setMultitrack, setCurrentJobId, setTrackIndex, setTotalDuration,
   setLoopEnabled, setLoopStart, setLoopEnd, setMasterVolume,
-  setWaveZoom, waveScroll, selectedStems,
+  setWaveZoom, waveScroll, selectedStems, getActiveStemNames,
 } from "./state.js";
 import {
   loadMixIntoState, resetMixerState, refreshMixerVisuals,
@@ -450,7 +450,7 @@ export function destroyPlayer() {
   // Reset static rows, then keep the pre-import shell to extractable stems
   // only. wireUpAudio will re-apply the exact returned-track set.
   clearStemSelectionFilter();
-  applyStemSelectionFilter(new Set(STEM_NAMES));
+  applyStemSelectionFilter(new Set(getActiveStemNames()));
   npThumb.classList.remove("loaded");
   npThumb.removeAttribute("src");
 
@@ -498,7 +498,7 @@ export function renderEmptyShell() {
     const { row } = renderMixerRow({ name, url: "#" });
     mixerEl.appendChild(row);
   }
-  applyStemSelectionFilter(new Set(STEM_NAMES));
+  applyStemSelectionFilter(new Set(getActiveStemNames()));
   titleEl.textContent = "Ready to import a track";
   bpmChip.textContent = "\u2014 BPM";
   keyChip.textContent = "\u2014 \u2014";
