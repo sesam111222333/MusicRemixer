@@ -270,29 +270,76 @@ async function cancelCurrentJob() {
   }
 }
 
+let sourceMode = "url"; // "url" | "file"
+
+function switchSourceMode(mode) {
+  sourceMode = mode;
+  const isFile = mode === "file";
+  tabUrl.setAttribute("aria-pressed", String(!isFile));
+  tabFile.setAttribute("aria-pressed", String(isFile));
+  urlPanel.classList.toggle("hidden", isFile);
+  filePanel.classList.toggle("hidden", !isFile);
+  if (isFile) {
+    urlInput.removeAttribute("required");
+  } else {
+    urlInput.setAttribute("required", "");
+  }
+}
+
 export function wireJobForm() {
   jobCancelBtn.addEventListener("click", cancelCurrentJob);
+
+  if (tabUrl) tabUrl.addEventListener("click", () => switchSourceMode("url"));
+  if (tabFile) tabFile.addEventListener("click", () => switchSourceMode("file"));
+
+  if (fileInput) {
+    fileInput.addEventListener("change", () => {
+      const name = fileInput.files?.[0]?.name || "Drop audio file or browse";
+      if (fileNameDisplay) fileNameDisplay.textContent = name;
+    });
+
+    filePanel.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      filePanel.classList.add("drag-over");
+    });
+    filePanel.addEventListener("dragleave", () => filePanel.classList.remove("drag-over"));
+    filePanel.addEventListener("drop", (e) => {
+      e.preventDefault();
+      filePanel.classList.remove("drag-over");
+      const file = e.dataTransfer?.files?.[0];
+      if (file) {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        fileInput.files = dt.files;
+        if (fileNameDisplay) fileNameDisplay.textContent = file.name;
+      }
+    });
+  }
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     reset();
     setSubmitProcessing(true);
-    const postUrlText = document.getElementById("post-url-text");
-    if (postUrlText) postUrlText.textContent = urlInput.value;
 
     let jobId;
     try {
-      const res = await fetch("/api/jobs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: urlInput.value,
-          // Backend uses this to decide whether to ffmpeg-amix a
-          // "selected stems" track (mix.wav) at the end of the
-          // pipeline. Sent as an array of stem names.
-          stems: [...selectedStems],
-        }),
-      });
+      let res;
+      if (sourceMode === "file") {
+        const file = fileInput?.files?.[0];
+        if (!file) throw new Error("No file selected");
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("stems", JSON.stringify([...selectedStems]));
+        res = await fetch("/api/jobs/upload", { method: "POST", body: fd });
+      } else {
+        const postUrlText = document.getElementById("post-url-text");
+        if (postUrlText) postUrlText.textContent = urlInput.value;
+        res = await fetch("/api/jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: urlInput.value, stems: [...selectedStems] }),
+        });
+      }
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || res.statusText);
       jobId = data.job_id;
