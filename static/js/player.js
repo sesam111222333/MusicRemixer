@@ -28,6 +28,14 @@ import {
 } from "./transport.js";
 import { stopVuLoop } from "./audio.js";
 
+// Wire master volume slider once at module load — affects playback only, not downloads.
+if (masterFader) {
+  masterFader.addEventListener("input", () => {
+    setMasterVolume(parseFloat(masterFader.value));
+    applyMix();
+  });
+}
+
 // Stem-selection filter: the import-page stem-choice toggles set
 // selectedStems (state.js). Backend always processes all 6 -- we
 // hide the rows for unselected stems in the studio dashboard so the
