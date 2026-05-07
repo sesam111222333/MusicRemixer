@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-REPO_DIR="/home/dennis/stemdeck"
+REPO_DIR="/home/dennis/MusicRemixer"
 SERVICE="music-remixer"
 
 cd "$REPO_DIR"
