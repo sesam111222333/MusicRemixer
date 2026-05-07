@@ -204,10 +204,13 @@ def _separate_bsroformer(job: Job, source: Path, job_dir: Path) -> Path:
         raise JobCancelled()
 
     # Identify vocals and instrumental output files.
+    # audio-separator may return bare filenames (relative) or full paths.
     vocals_path: Path | None = None
     instrumental_path: Path | None = None
     for f in output_files:
         p = Path(f)
+        if not p.is_absolute():
+            p = bsr_tmp / p
         name_lower = p.name.lower()
         if "(instrumental)" in name_lower or "(no_vocals)" in name_lower or "(no vocals)" in name_lower:
             instrumental_path = p
