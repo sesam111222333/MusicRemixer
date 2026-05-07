@@ -149,9 +149,16 @@ def _run_demucs_on_file(job: Job, source: Path, out_dir: Path, model: str, progr
         last = tail[-1] if tail else f"exit status {proc.returncode}"
         raise RuntimeError(f"demucs (instrument stage) failed: {last}")
 
-    stems_root = out_dir / model / source.stem
-    if not stems_root.is_dir():
-        raise RuntimeError(f"demucs instrument output not found at {stems_root}")
+    # Demucs names the output directory after the input file's stem.
+    # Scan instead of constructing the path to be robust against any
+    # filename sanitization Demucs might apply.
+    model_dir = out_dir / model
+    if not model_dir.is_dir():
+        raise RuntimeError(f"Demucs model output dir not found: {model_dir}")
+    candidates = [d for d in model_dir.iterdir() if d.is_dir()]
+    if not candidates:
+        raise RuntimeError(f"No stem directories found in {model_dir}")
+    stems_root = max(candidates, key=lambda d: d.stat().st_mtime)
     return stems_root
 
 
@@ -215,11 +222,15 @@ def _separate_bsroformer(job: Job, source: Path, job_dir: Path) -> Path:
     logger.info("BSR vocals: %s  instrumental: %s", vocals_path.name, instrumental_path.name)
 
     # Stage 2: Demucs on the instrumental to get drums/bass/other.
+    # Rename to a plain filename first — Demucs uses the input stem as its
+    # output directory name and may choke on special chars / long names.
     demucs_tmp = job_dir / "_demucs_tmp"
     demucs_tmp.mkdir(exist_ok=True)
-    inst_model = "htdemucs_ft"
+    plain_instrumental = demucs_tmp / "instrumental.wav"
+    shutil.copy2(str(instrumental_path), plain_instrumental)
 
-    inst_stems_root = _run_demucs_on_file(job, instrumental_path, demucs_tmp, inst_model, 0.45)
+    inst_model = "htdemucs_ft"
+    inst_stems_root = _run_demucs_on_file(job, plain_instrumental, demucs_tmp, inst_model, 0.45)
 
     # Assemble the four stems into a clean output directory.
     stems_root = job_dir / "_bsr_stems"
