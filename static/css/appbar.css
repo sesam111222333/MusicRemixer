@@ -133,26 +133,6 @@
   font-size: clamp(14px, 0.9vw, 16px);
 }
 
-.appbar-import-panel .stem-choice-row {
-  grid-template-columns: 156px repeat(4, minmax(92px, 1fr));
-  gap: 14px;
-  padding-top: 20px;
-}
-
-.appbar-import-panel .stem-choice-row > span {
-  font-size: clamp(12px, 0.8vw, 14px);
-}
-
-.appbar-import-panel .stem-choice {
-  min-height: 48px;
-  padding: 0 14px;
-  border-radius: 10px;
-  font-size: clamp(12px, 0.8vw, 14px);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, currentColor 9%, transparent), transparent),
-    rgba(8, 15, 22, 0.42);
-}
-
 .url-wrap {
   display: flex;
   align-items: center;

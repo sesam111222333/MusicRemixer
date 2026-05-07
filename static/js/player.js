@@ -13,7 +13,7 @@ import {
   masterVolume, masterFader, mixerState,
   setMultitrack, setCurrentJobId, setTrackIndex, setTotalDuration,
   setLoopEnabled, setLoopStart, setLoopEnd, setMasterVolume,
-  setWaveZoom, waveScroll, selectedStems, dlAllStemsBtn,
+  setWaveZoom, waveScroll, dlAllStemsBtn, dlMixBtn,
 } from "./state.js";
 import {
   loadMixIntoState, resetMixerState, refreshMixerVisuals,
@@ -103,44 +103,85 @@ let stemVuRafId = null;
 
 // ─── Master clock sync ───
 //
-// The multitrack library's `setTime()` calls `setTime()` on every child
-// wavesurfer back-to-back, which seeks each underlying HTML audio
-// element concurrently. Each one finishes seeking at a slightly
-// different sample boundary, leaving the tracks audibly out of sync
-// after every playhead move. The fix here patches setTime() and play()
-// to do a proper pause → seek-all → wait-for-seeked → resume-all dance,
-// so all tracks land on the same sample boundary AND start playback in
-// the same animation frame.
+// The multitrack bundle uses a private WebAudioPlayer per track. Each
+// player's `_play()` calls `bufferNode.start(audioContext.currentTime,
+// playedDuration)` -- which captures `audioContext.currentTime` AT THAT
+// LINE OF JS. When the bundle iterates all tracks and calls play()
+// sequentially, each captures a slightly later instant, so the tracks
+// start a few ms apart. After several seeks that flam compounds into
+// audible desync.
+//
+// The fix bypasses the per-track play sequence and instead schedules
+// every track's bufferNode at the SAME future audio-clock time. The
+// shared audio context guarantees sample-accurate alignment from there.
+//
+// Implementation reaches into WebAudioPlayer's properties (audioContext,
+// buffer, gainNode, bufferNode, paused, playedDuration, playStartTime).
+// These are non-private and stable across the bundle versions we ship.
 
-const HARD_DRIFT_SEC = 0.12;   // re-sync if any slave drifts past this
-const SEEK_SETTLE_MS = 300;    // safety timeout for 'seeked' wait
+const RESUME_LOOKAHEAD = 0.04;   // 40 ms — covers worst-case task latency
+const HARD_DRIFT_SEC = 0.12;     // safety net only
 let _masterClockCleanup = null;
 
 function _mediaEl(ws) {
   try { return ws?.getMediaElement?.() ?? null; } catch { return null; }
 }
 
-function _waitSeeked(el) {
-  // Resolves when the media element finishes its current seek operation.
-  // If it isn't seeking, resolves immediately. A safety timeout protects
-  // against browsers that occasionally drop the 'seeked' event after an
-  // aborted seek (e.g. the user starts dragging mid-seek).
-  if (!el || !el.seeking) return Promise.resolve();
-  return new Promise((resolve) => {
-    const done = () => {
-      el.removeEventListener("seeked", done);
-      clearTimeout(t);
-      resolve();
-    };
-    el.addEventListener("seeked", done);
-    const t = setTimeout(done, SEEK_SETTLE_MS);
-  });
+function _isWebAudioPlayer(el) {
+  // Duck-type the bundle's WebAudioPlayer (the only path that gives us
+  // sample-accurate scheduling). HTMLMediaElement-backed media won't
+  // have these fields set up.
+  return !!(el && el.audioContext && el.buffer && el.gainNode);
 }
 
-function _seekAll(wsArr, time) {
-  for (const ws of wsArr) {
-    const el = _mediaEl(ws);
-    if (el) el.currentTime = time;
+function _atomicPauseAll(els) {
+  // Stop every active bufferNode in the same JS task and update each
+  // player's playedDuration to reflect "where it actually was". This is
+  // what _pause() does internally; we inline it so we don't pay the
+  // per-call audioContext.currentTime read drift.
+  if (!els.length) return;
+  const ctx = els[0].audioContext;
+  const now = ctx?.currentTime ?? 0;
+  for (const el of els) {
+    if (el.paused) continue;
+    el.paused = true;
+    try { el.bufferNode?.stop(); } catch { /* ignore */ }
+    el.playedDuration += now - el.playStartTime;
+  }
+}
+
+function _atomicSeekAll(els, time) {
+  for (const el of els) el.playedDuration = time;
+}
+
+function _atomicResumeAll(els) {
+  // Schedule every track's new bufferNode at the SAME `t0`. Because all
+  // tracks share one AudioContext (the multitrack constructor creates
+  // exactly one), starting all bufferNodes at t0 means each plays its
+  // first sample at the same audio clock instant. Result: sample-
+  // accurate sync, regardless of how long the JS scheduling loop took.
+  if (!els.length) return;
+  const ctx = els[0].audioContext;
+  if (ctx.state === "suspended") {
+    // Resume is async — but we don't await it because scheduling at
+    // ctx.currentTime + lookahead still works while resuming.
+    ctx.resume().catch(() => { /* ignore */ });
+  }
+  const t0 = ctx.currentTime + RESUME_LOOKAHEAD;
+  for (const el of els) {
+    if (!el.paused) continue;
+    el.paused = false;
+    try { el.bufferNode?.disconnect(); } catch { /* ignore */ }
+    const node = ctx.createBufferSource();
+    node.buffer = el.buffer;
+    node.connect(el.gainNode);
+    if (el.playedDuration >= el.duration) el.playedDuration = 0;
+    node.start(t0, el.playedDuration);
+    el.bufferNode = node;
+    el.playStartTime = t0;
+    // Re-emit the bundle's "play" event so wavesurfer's UI listeners
+    // (the play-button class toggle in wireUpAudio) still update.
+    try { el.emit?.("play"); } catch { /* ignore */ }
   }
 }
 
@@ -155,72 +196,61 @@ function startMasterClock(mt, wsArr) {
   stopMasterClock();
   if (!mt || !wsArr || wsArr.length < 2) return;
 
+  // Collect WebAudioPlayer instances. If any track isn't WebAudioPlayer
+  // (e.g. a future change to use HTMLAudio), bail out and let the bundle
+  // handle it -- our fix only works with the Web Audio backend.
+  const els = wsArr.map(_mediaEl).filter(Boolean);
+  if (!els.length || !els.every(_isWebAudioPlayer)) return;
+
   const originalSetTime = mt.setTime?.bind(mt);
   const originalPlay = mt.play?.bind(mt);
+  const originalPause = mt.pause?.bind(mt);
 
-  // Atomic pause → seek → settle → resume. Bypasses the per-wavesurfer
-  // setTime calls in the bundle so all media elements seek at once and
-  // resume in the same animation frame.
   mt.setTime = (time) => {
     const wasPlaying = mt.isPlaying?.() ?? false;
-
+    _atomicPauseAll(els);
+    _atomicSeekAll(els, time);
     if (wasPlaying) {
-      for (const ws of wsArr) {
-        const el = _mediaEl(ws);
-        if (el && !el.paused) el.pause();
-      }
+      _atomicResumeAll(els);
     }
-
-    _seekAll(wsArr, time);
-
-    if (!wasPlaying) {
-      // Even when paused, fall through to originalSetTime so the bundle's
-      // internal currentTime cache stays consistent with the media elements.
-      try { originalSetTime?.(time); } catch { /* ignore */ }
-      return;
-    }
-
-    Promise.all(wsArr.map((ws) => _waitSeeked(_mediaEl(ws)))).then(() => {
-      // Resume them all in the same animation frame so jitter between
-      // play() calls is < 16 ms.
-      requestAnimationFrame(() => {
-        for (const ws of wsArr) {
-          const el = _mediaEl(ws);
-          if (el && el.paused) el.play().catch(() => { /* ignore autoplay block */ });
-        }
-      });
-    });
   };
 
-  // Before the bundle issues play() to each wavesurfer, snap every slave
-  // to wavesurfers[0]'s currentTime. Otherwise stop+start can resume
-  // tracks at slightly different positions if a previous seek didn't
-  // settle exactly.
-  mt.play = (...args) => {
-    const masterEl = _mediaEl(wsArr[0]);
-    if (masterEl) {
-      const t = masterEl.currentTime;
-      for (let i = 1; i < wsArr.length; i++) {
-        const el = _mediaEl(wsArr[i]);
-        if (el && Math.abs(el.currentTime - t) > 0.005) el.currentTime = t;
+  mt.play = () => {
+    // Snap all to track 0 first, then schedule everything at the same t0.
+    const t = els[0].paused
+      ? els[0].playedDuration
+      : els[0].playedDuration + (els[0].audioContext.currentTime - els[0].playStartTime);
+    for (const el of els) el.playedDuration = t;
+    // Mark all paused so _atomicResumeAll will start them.
+    for (const el of els) {
+      if (!el.paused) {
+        el.paused = true;
+        try { el.bufferNode?.stop(); } catch { /* ignore */ }
       }
     }
-    return originalPlay?.(...args);
+    _atomicResumeAll(els);
   };
 
-  // Periodic drift safety net. Catastrophic drift (> 120 ms) shouldn't
-  // happen in normal playback, but if it does -- e.g. one element
-  // stalled briefly waiting for buffer -- a gentle re-sync via the
-  // patched setTime will recover without the user having to stop/start.
+  mt.pause = () => {
+    _atomicPauseAll(els);
+    // Notify the wavesurfer event listeners so the UI play/pause button
+    // updates correctly. The bundle's own pause() emits these per track.
+    for (const el of els) {
+      try { el.emit?.("pause"); } catch { /* ignore */ }
+    }
+  };
+
+  // Safety net: very rarely an underlying buffer node can finish early
+  // (e.g. clipped audio buffer). If any track drifts > HARD_DRIFT_SEC
+  // from the master, do a clean re-sync via the patched setTime.
   const driftCheckId = setInterval(() => {
     if (!mt.isPlaying?.()) return;
-    const masterEl = _mediaEl(wsArr[0]);
-    if (!masterEl) return;
-    const masterT = masterEl.currentTime;
-    for (let i = 1; i < wsArr.length; i++) {
-      const el = _mediaEl(wsArr[i]);
-      if (!el) continue;
-      if (Math.abs(el.currentTime - masterT) > HARD_DRIFT_SEC) {
+    const m = els[0];
+    const masterT = m.playedDuration + (m.audioContext.currentTime - m.playStartTime);
+    for (let i = 1; i < els.length; i++) {
+      const e = els[i];
+      const slaveT = e.playedDuration + (e.audioContext.currentTime - e.playStartTime);
+      if (Math.abs(slaveT - masterT) > HARD_DRIFT_SEC) {
         mt.setTime(masterT);
         return;
       }
@@ -231,6 +261,7 @@ function startMasterClock(mt, wsArr) {
     clearInterval(driftCheckId);
     if (originalSetTime) mt.setTime = originalSetTime;
     if (originalPlay) mt.play = originalPlay;
+    if (originalPause) mt.pause = originalPause;
   };
 }
 
@@ -588,6 +619,7 @@ export function destroyPlayer() {
   npThumb.classList.remove("loaded");
   npThumb.removeAttribute("src");
   if (dlAllStemsBtn) { dlAllStemsBtn.removeAttribute("href"); dlAllStemsBtn.classList.add("hidden"); }
+  if (dlMixBtn) dlMixBtn.classList.add("hidden");
 
   rulerTime.innerHTML = '<div class="playhead-marker" aria-hidden="true"><svg viewBox="0 0 10 10" width="10" height="10"><polygon points="0,0 10,0 5,8" fill="#e54e4e"></polygon></svg></div>';
   wavesGrid.innerHTML = "";
@@ -675,15 +707,10 @@ export function wireUpAudio(jobId, stems, duration, thumbnail) {
   setLaneControlsEnabled(true);
 
   // User-selected stems only. Backend produced all 6, but the import-
-  // page toggles tell us which ones the user actually wanted to see.
-  // Filter early so multitrack, decoded-visuals, energy baseline, and
-  // mini-waves all operate on the trimmed set. The synthetic "original"
-  // track always passes the filter -- the user wants the full song
-  // available alongside the isolated stems for A/B comparison. (When
-  // the user selected all 6 stems, the backend doesn't produce
-  // original.wav, so it's simply not in `stems` and the mixer/sidebar
-  // rows for it stay hidden.)
-  stems = stems.filter((s) => s.name === "original" || selectedStems.has(s.name));
+  // The backend produces all 4 stems, no client-side filtering needed.
+  // applyStemSelectionFilter still runs to hide the "original" mixer row
+  // (synthetic original.wav is no longer produced now that there's no
+  // stem-subset selector).
   applyStemSelectionFilter(new Set(stems.map((s) => s.name)));
 
   for (const stem of stems) {

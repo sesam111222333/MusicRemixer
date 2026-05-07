@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import io
+import subprocess
 import zipfile
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.core.config import JOB_ID_RE, JOBS_DIR, STEM_NAMES
@@ -64,4 +65,70 @@ def download_all_stems(job_id: str) -> StreamingResponse:
         generate(),
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/jobs/{job_id}/remix.wav")
+def download_remix(
+    job_id: str,
+    stems: str = Query(""),
+    volumes: str = Query(""),
+) -> StreamingResponse:
+    """Stream a custom mix of the given stems at the given volumes via ffmpeg."""
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
+    job = registry_get(job_id)
+    if job is None or job.status != "done":
+        raise HTTPException(status_code=404, detail="job not ready")
+
+    stem_names = [s.strip() for s in stems.split(",") if s.strip()]
+    vol_values = [v.strip() for v in volumes.split(",") if v.strip()]
+
+    if not stem_names:
+        raise HTTPException(status_code=422, detail="no stems specified")
+
+    # Pad missing volumes with 1.0
+    while len(vol_values) < len(stem_names):
+        vol_values.append("1.0")
+
+    stems_dir = (JOBS_DIR / job_id / "stems").resolve()
+    pairs: list[tuple[str, float]] = []
+    for name, vol_str in zip(stem_names, vol_values):
+        if name not in _ALLOWED_NAMES:
+            continue
+        path = stems_dir / f"{name}.wav"
+        if not path.is_file() or not path.is_relative_to(JOBS_DIR.resolve()):
+            continue
+        try:
+            vol = max(0.0, min(4.0, float(vol_str)))
+        except ValueError:
+            vol = 1.0
+        pairs.append((name, vol))
+
+    if not pairs:
+        raise HTTPException(status_code=404, detail="no valid stems found")
+
+    cmd: list[str] = ["ffmpeg", "-nostdin", "-y", "-loglevel", "error"]
+    for name, _ in pairs:
+        cmd += ["-i", str(stems_dir / f"{name}.wav")]
+
+    filter_parts = [f"[{i}]volume={v:.6f}[a{i}]" for i, (_, v) in enumerate(pairs)]
+    mixed_inputs = "".join(f"[a{i}]" for i in range(len(pairs)))
+    filter_complex = ";".join(filter_parts) + f";{mixed_inputs}amix=inputs={len(pairs)}:normalize=0[out]"
+    cmd += ["-filter_complex", filter_complex, "-map", "[out]", "-f", "wav", "-"]
+
+    def generate():
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            while chunk := proc.stdout.read(65536):
+                yield chunk
+        finally:
+            proc.stdout.close()
+            proc.wait()
+
+    safe = (job.title or job_id).replace("/", "_").replace("\\", "_")[:80]
+    return StreamingResponse(
+        generate(),
+        media_type="audio/wav",
+        headers={"Content-Disposition": f'attachment; filename="{safe}_mix.wav"'},
     )

@@ -1,5 +1,4 @@
 import { $ } from "./utils.js";
-import { STEM_NAMES } from "./constants.js";
 
 // ─── DOM refs ───
 
@@ -55,6 +54,7 @@ export const stemListEl = document.querySelector(".stem-list");
 export const npScrubEl = document.querySelector(".np-scrub");
 export const npScrubFill = document.querySelector(".np-scrub > span");
 export const dlAllStemsBtn = $("dl-all-stems");
+export const dlMixBtn = $("dl-mix");
 
 // ─── Mutable state ───
 
@@ -73,34 +73,6 @@ export let loopEnabled = false;
 export let loopStart = 0;
 export let loopEnd = 0;
 export let waveZoom = 1;
-
-// Selected stems for extraction. Persisted across reloads in localStorage
-// so a user who turns off "Vocals" stays set up that way for the next song.
-const _STEM_SEL_KEY = "stemdeck:selected-stems";
-function _loadSelectedStems() {
-  try {
-    const raw = localStorage.getItem(_STEM_SEL_KEY);
-    if (raw) {
-      const arr = JSON.parse(raw);
-      if (Array.isArray(arr) && arr.length > 0) {
-        const filtered = arr.filter((n) => STEM_NAMES.includes(n));
-        if (filtered.length > 0) return new Set(filtered);
-      }
-    }
-  } catch { /* ignore */ }
-  return new Set(STEM_NAMES);
-}
-export let selectedStems = _loadSelectedStems();
-export function saveSelectedStems() {
-  try {
-    localStorage.setItem(_STEM_SEL_KEY, JSON.stringify([...selectedStems]));
-  } catch { /* ignore */ }
-}
-export function setStemSelected(name, selected) {
-  if (selected) selectedStems.add(name);
-  else selectedStems.delete(name);
-  saveSelectedStems();
-}
 
 // Web Audio analysers for live VU meters.
 export let audioContext = null;

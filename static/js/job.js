@@ -3,7 +3,6 @@ import {
   submitBtn, errorEl, jobBox, jobTitleEl, jobStageEl,
   jobDetailEl, jobCancelBtn, progressEl, titleEl, bpmChip, keyChip,
   eventSource, setEventSource, setCurrentJobId, currentJobId,
-  selectedStems,
 } from "./state.js";
 
 // Single supported separation pipeline. Sent on every job submit so the
@@ -333,7 +332,6 @@ export function wireJobForm() {
         if (!file) throw new Error("No file selected");
         const fd = new FormData();
         fd.append("file", file);
-        fd.append("stems", JSON.stringify([...selectedStems]));
         fd.append("backend", BACKEND);
         res = await fetch("/api/jobs/upload", { method: "POST", body: fd });
       } else {
@@ -342,7 +340,7 @@ export function wireJobForm() {
         res = await fetch("/api/jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: urlInput.value, stems: [...selectedStems], backend: BACKEND }),
+          body: JSON.stringify({ url: urlInput.value, backend: BACKEND }),
         });
       }
       const data = await res.json();
