@@ -333,3 +333,25 @@
 .hidden {
   display: none !important;
 }
+
+.btn-dl-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 6px 13px;
+  border-radius: 8px;
+  border: 1px solid var(--glass-line, rgba(255,255,255,0.12));
+  background: rgba(255,255,255,0.05);
+  color: var(--text-muted, #aaa);
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.btn-dl-all:hover {
+  background: rgba(255,255,255,0.1);
+  border-color: rgba(255,255,255,0.25);
+  color: #fff;
+}

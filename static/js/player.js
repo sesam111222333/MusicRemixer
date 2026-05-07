@@ -13,7 +13,7 @@ import {
   masterVolume, masterFader, mixerState,
   setMultitrack, setCurrentJobId, setTrackIndex, setTotalDuration,
   setLoopEnabled, setLoopStart, setLoopEnd, setMasterVolume,
-  setWaveZoom, waveScroll, selectedStems,
+  setWaveZoom, waveScroll, selectedStems, dlAllStemsBtn,
 } from "./state.js";
 import {
   loadMixIntoState, resetMixerState, refreshMixerVisuals,
@@ -587,6 +587,7 @@ export function destroyPlayer() {
   applyStemSelectionFilter(new Set(STEM_NAMES));
   npThumb.classList.remove("loaded");
   npThumb.removeAttribute("src");
+  if (dlAllStemsBtn) { dlAllStemsBtn.removeAttribute("href"); dlAllStemsBtn.classList.add("hidden"); }
 
   rulerTime.innerHTML = '<div class="playhead-marker" aria-hidden="true"><svg viewBox="0 0 10 10" width="10" height="10"><polygon points="0,0 10,0 5,8" fill="#e54e4e"></polygon></svg></div>';
   wavesGrid.innerHTML = "";
@@ -696,6 +697,11 @@ export function wireUpAudio(jobId, stems, duration, thumbnail) {
   }
 
   stemsChip.textContent = `${stems.length} Stems`;
+  if (dlAllStemsBtn) {
+    dlAllStemsBtn.href = `/api/jobs/${jobId}/stems.zip`;
+    dlAllStemsBtn.download = "";
+    dlAllStemsBtn.classList.remove("hidden");
+  }
 
   if (thumbnail) {
     npThumb.onload = () => npThumb.classList.add("loaded");

@@ -54,6 +54,7 @@ export const footerTimeTotal = $("footer-time-total");
 export const stemListEl = document.querySelector(".stem-list");
 export const npScrubEl = document.querySelector(".np-scrub");
 export const npScrubFill = document.querySelector(".np-scrub > span");
+export const dlAllStemsBtn = $("dl-all-stems");
 
 // ─── Mutable state ───
 
