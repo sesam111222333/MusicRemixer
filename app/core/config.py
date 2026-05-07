@@ -57,4 +57,4 @@ BSROFORMER_MODEL = (
     os.environ.get("STEMDECK_BSROFORMER_MODEL", "model_bs_roformer_ep_317_sdr_12.9755.ckpt").strip()
     or "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
 )
-DEFAULT_BACKEND = os.environ.get("STEMDECK_DEFAULT_BACKEND", "demucs").strip() or "demucs"
+DEFAULT_BACKEND = os.environ.get("STEMDECK_DEFAULT_BACKEND", "bsroformer").strip() or "bsroformer"

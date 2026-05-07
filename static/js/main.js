@@ -1,44 +1,13 @@
 import {
   playBtn, loopBtn, multitrack, loopEnabled, loopStart, loopEnd,
   setLoopStart, setLoopEnd, selectedStems, saveSelectedStems,
-  selectedBackend, setSelectedBackend, getActiveStemNames,
-  form,
 } from "./state.js";
+import { STEM_NAMES } from "./constants.js";
 import { renderEmptyShell } from "./player.js";
 import { wireJobForm } from "./job.js";
 import { wireTransportButtons } from "./transport.js";
 import { togglePlayPause, updateLoopRegionVisual } from "./transport.js";
 import { wireStemListControls, wireMixerToolbar } from "./mixer.js";
-
-// ─── Backend model selector ───
-
-function updateBackendUI() {
-  form.dataset.backend = selectedBackend;
-  for (const btn of document.querySelectorAll(".backend-tab")) {
-    btn.setAttribute("aria-pressed", String(btn.dataset.backend === selectedBackend));
-  }
-}
-
-function wireBackendButtons() {
-  updateBackendUI();
-  for (const btn of document.querySelectorAll(".backend-tab")) {
-    btn.addEventListener("click", () => {
-      if (btn.dataset.backend === selectedBackend) return;
-      setSelectedBackend(btn.dataset.backend);
-      // Drop stems that don't exist in the new backend.
-      const validNames = getActiveStemNames();
-      for (const stem of [...selectedStems]) {
-        if (!validNames.includes(stem)) selectedStems.delete(stem);
-      }
-      if (selectedStems.size === 0) {
-        for (const n of validNames) selectedStems.add(n);
-      }
-      saveSelectedStems();
-      updateBackendUI();
-      refreshStemChoiceVisuals();
-    });
-  }
-}
 
 // ─── Stem choice toggles on the import page ───
 //
@@ -69,15 +38,14 @@ function refreshStemChoiceVisuals() {
 }
 
 function handleStemChoiceClick(stem) {
-  const stemNames = getActiveStemNames();
-  const allSelected = stemNames.every((n) => selectedStems.has(n));
+  const allSelected = STEM_NAMES.every((n) => selectedStems.has(n));
   if (allSelected) {
     selectedStems.clear();
     selectedStems.add(stem);
   } else if (selectedStems.has(stem)) {
     selectedStems.delete(stem);
     if (selectedStems.size === 0) {
-      for (const n of stemNames) selectedStems.add(n);
+      for (const n of STEM_NAMES) selectedStems.add(n);
     }
   } else {
     selectedStems.add(stem);
@@ -100,7 +68,6 @@ wireTransportButtons();
 wireStemListControls();
 wireMixerToolbar();
 wireStemChoiceButtons();
-wireBackendButtons();
 
 // ─── Keyboard shortcuts ───
 

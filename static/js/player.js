@@ -1,7 +1,7 @@
 import Multitrack from "/vendor/multitrack.js";
 import { fmtTime } from "./utils.js";
 import {
-  TRACK_NAMES, STEM_COLORS, PROGRESS_COLOR,
+  STEM_NAMES, TRACK_NAMES, STEM_COLORS, PROGRESS_COLOR,
   LOOP_DEFAULT_START_FRAC, LOOP_DEFAULT_END_FRAC,
 } from "./constants.js";
 import {
@@ -13,7 +13,7 @@ import {
   masterVolume, masterFader, mixerState,
   setMultitrack, setCurrentJobId, setTrackIndex, setTotalDuration,
   setLoopEnabled, setLoopStart, setLoopEnd, setMasterVolume,
-  setWaveZoom, waveScroll, selectedStems, getActiveStemNames,
+  setWaveZoom, waveScroll, selectedStems,
 } from "./state.js";
 import {
   loadMixIntoState, resetMixerState, refreshMixerVisuals,
@@ -100,6 +100,98 @@ const STEM_VU_FPS = 30;
 let visualRenderToken = 0;
 let visualAudioContext = null;
 let stemVuRafId = null;
+
+// ─── Master clock sync ───
+//
+// The multitrack library's internal sync loop drifts after seeks because
+// each wavesurfer's HTML audio element finishes its seek operation at a
+// slightly different sample boundary. This module-level RAF loop reads
+// wavesurfers[0] as the master and forces any slave that drifts beyond
+// the threshold to snap back. After a manual seek (clicking the ruler),
+// the native HTMLMediaElement 'seeked' event also triggers an immediate
+// re-sync so the user never hears the tracks separate.
+
+const MASTER_SYNC_DRIFT = 0.04; // 40 ms — below human flam perception (~50ms)
+const SEEK_RESYNC_DELAY = 80;   // ms after 'seeked' before forcing sync
+
+let _masterClockRafId = null;
+let _masterClockCleanup = null;
+
+function _wsMediaEl(ws) {
+  try { return ws?.getMediaElement?.() ?? null; } catch { return null; }
+}
+
+function _wsTime(ws) {
+  const el = _wsMediaEl(ws);
+  if (el) return el.currentTime;
+  return ws?.getCurrentTime?.() ?? 0;
+}
+
+function stopMasterClock() {
+  if (_masterClockRafId !== null) {
+    cancelAnimationFrame(_masterClockRafId);
+    _masterClockRafId = null;
+  }
+  if (_masterClockCleanup) {
+    _masterClockCleanup();
+    _masterClockCleanup = null;
+  }
+}
+
+function startMasterClock(wsArr) {
+  stopMasterClock();
+  if (!wsArr || wsArr.length < 2) return;
+  const master = wsArr[0];
+  const masterEl = _wsMediaEl(master);
+
+  function syncSlavesTo(targetTime) {
+    for (let i = 1; i < wsArr.length; i++) {
+      const ws = wsArr[i];
+      if (!ws) continue;
+      const drift = Math.abs(_wsTime(ws) - targetTime);
+      if (drift > MASTER_SYNC_DRIFT) {
+        try { ws.setTime(targetTime); } catch { /* ignore */ }
+      }
+    }
+  }
+
+  // Native 'seeked' fires once the HTML audio element settles after a
+  // seek -- this is the moment we know the master's currentTime is
+  // final and we can drag every slave to match.
+  let seekTimer = null;
+  function onSeeked() {
+    if (seekTimer) clearTimeout(seekTimer);
+    seekTimer = setTimeout(() => {
+      const t = _wsTime(master);
+      // Force-sync ignoring the drift threshold so even sub-40ms
+      // gaps left over from a manual seek get cleaned up.
+      for (let i = 1; i < wsArr.length; i++) {
+        try { wsArr[i]?.setTime(t); } catch { /* ignore */ }
+      }
+    }, SEEK_RESYNC_DELAY);
+  }
+
+  if (masterEl) {
+    masterEl.addEventListener("seeked", onSeeked);
+  }
+
+  _masterClockCleanup = () => {
+    if (seekTimer) clearTimeout(seekTimer);
+    if (masterEl) masterEl.removeEventListener("seeked", onSeeked);
+  };
+
+  // Continuous drift correction during playback. We deliberately skip
+  // the correction while paused -- a paused track should NOT be seeked
+  // every frame just because of a 50ms residual offset; that would
+  // generate constant audible clicks if the user resumed mid-frame.
+  function tick() {
+    if (master.isPlaying?.()) {
+      syncSlavesTo(_wsTime(master));
+    }
+    _masterClockRafId = requestAnimationFrame(tick);
+  }
+  _masterClockRafId = requestAnimationFrame(tick);
+}
 
 function isAudioBufferLike(value) {
   return value && typeof value.getChannelData === "function";
@@ -431,6 +523,7 @@ export function destroyPlayer() {
   document.querySelector(".app")?.classList.remove("is-import");
   stopVuLoop();
   stopStemVuLoop();
+  stopMasterClock();
   if (multitrack) {
     multitrack.destroy();
     setMultitrack(null);
@@ -450,7 +543,7 @@ export function destroyPlayer() {
   // Reset static rows, then keep the pre-import shell to extractable stems
   // only. wireUpAudio will re-apply the exact returned-track set.
   clearStemSelectionFilter();
-  applyStemSelectionFilter(new Set(getActiveStemNames()));
+  applyStemSelectionFilter(new Set(STEM_NAMES));
   npThumb.classList.remove("loaded");
   npThumb.removeAttribute("src");
 
@@ -498,7 +591,7 @@ export function renderEmptyShell() {
     const { row } = renderMixerRow({ name, url: "#" });
     mixerEl.appendChild(row);
   }
-  applyStemSelectionFilter(new Set(getActiveStemNames()));
+  applyStemSelectionFilter(new Set(STEM_NAMES));
   titleEl.textContent = "Ready to import a track";
   bpmChip.textContent = "\u2014 BPM";
   keyChip.textContent = "\u2014 \u2014";
@@ -639,6 +732,7 @@ export function wireUpAudio(jobId, stems, duration, thumbnail) {
     const wsArr = mt.wavesurfers || mt._wavesurfers;
     const ws = wsArr?.[0];
     if (!ws) return;
+    startMasterClock(wsArr);
 
     let loopWrapLogged = false;
     ws.on("timeupdate", (t) => {

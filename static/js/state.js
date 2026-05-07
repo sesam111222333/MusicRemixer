@@ -1,5 +1,5 @@
 import { $ } from "./utils.js";
-import { STEM_NAMES_4, STEM_NAMES_6 } from "./constants.js";
+import { STEM_NAMES } from "./constants.js";
 
 // ─── DOM refs ───
 
@@ -73,36 +73,21 @@ export let loopStart = 0;
 export let loopEnd = 0;
 export let waveZoom = 1;
 
-// Which separation backend the user has chosen. Persisted across reloads.
-const _BACKEND_KEY = "stemdeck:backend";
-export let selectedBackend = localStorage.getItem(_BACKEND_KEY) || "demucs";
-export function setSelectedBackend(b) {
-  selectedBackend = b;
-  try { localStorage.setItem(_BACKEND_KEY, b); } catch { /* ignore */ }
-}
-
-// Returns the stem name list for the currently selected backend.
-export function getActiveStemNames() {
-  return selectedBackend === "bsroformer" ? STEM_NAMES_4 : STEM_NAMES_6;
-}
-
 // Selected stems for extraction. Persisted across reloads in localStorage
 // so a user who turns off "Vocals" stays set up that way for the next song.
-// Filtered against the active backend's stem list on load.
 const _STEM_SEL_KEY = "stemdeck:selected-stems";
 function _loadSelectedStems() {
-  const validNames = selectedBackend === "bsroformer" ? STEM_NAMES_4 : STEM_NAMES_6;
   try {
     const raw = localStorage.getItem(_STEM_SEL_KEY);
     if (raw) {
       const arr = JSON.parse(raw);
       if (Array.isArray(arr) && arr.length > 0) {
-        const filtered = arr.filter((n) => validNames.includes(n));
+        const filtered = arr.filter((n) => STEM_NAMES.includes(n));
         if (filtered.length > 0) return new Set(filtered);
       }
     }
   } catch { /* ignore */ }
-  return new Set(validNames);
+  return new Set(STEM_NAMES);
 }
 export let selectedStems = _loadSelectedStems();
 export function saveSelectedStems() {

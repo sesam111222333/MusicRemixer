@@ -27,8 +27,9 @@ class Job:
     lufs: float | None = None  # ITU-R BS.1770 integrated loudness (dB)
     peak_db: float | None = None  # sample peak in dBFS (close to true peak)
     stems: list[dict[str, str]] = field(default_factory=list)
-    # Which separation backend was chosen at submit time ("demucs" | "bsroformer").
-    backend: str = "demucs"
+    # Which separation backend was chosen at submit time ("bsroformer" only
+    # in production; "demucs" path kept for opt-in testing via env var).
+    backend: str = "bsroformer"
     # Subset of stems the user chose at submit. The pipeline produces all
     # stems for the chosen backend, but after collect we mix down only the
     # selected ones into mix.wav so the user can download a single track.
@@ -36,9 +37,9 @@ class Job:
 
     @property
     def stem_names(self) -> tuple[str, ...]:
-        if self.backend == "bsroformer":
-            return ("vocals", "drums", "bass", "other")
-        return ("vocals", "drums", "bass", "guitar", "piano", "other")
+        if self.backend == "demucs":
+            return ("vocals", "drums", "bass", "guitar", "piano", "other")
+        return ("vocals", "drums", "bass", "other")
     mix_url: str | None = None  # populated when a strict subset was selected
     error: str | None = None
     # Set by POST /api/jobs/{id}/cancel; consumed by pipeline stages.
