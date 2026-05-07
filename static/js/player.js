@@ -730,6 +730,31 @@ export function wireUpAudio(jobId, stems, duration, thumbnail) {
     dlAllStemsBtn.classList.remove("hidden");
   }
 
+  if (dlMixBtn) {
+    dlMixBtn.classList.remove("hidden");
+    dlMixBtn.onclick = () => {
+      const allNames = Object.keys(trackIndex);
+      const anySolo = allNames.some((n) => mixerState[n]?.soloed);
+      const active = allNames.filter((n) => {
+        const s = mixerState[n];
+        if (!s) return false;
+        if (s.muted) return false;
+        if (anySolo && !s.soloed) return false;
+        return (s.volume ?? 1) > 0;
+      });
+      if (!active.length) return;
+      const stemParam = active.join(",");
+      const volParam = active.map((n) => (mixerState[n]?.volume ?? 1).toFixed(4)).join(",");
+      const url = `/api/jobs/${jobId}/remix.wav?stems=${encodeURIComponent(stemParam)}&volumes=${encodeURIComponent(volParam)}`;
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    };
+  }
+
   if (thumbnail) {
     npThumb.onload = () => npThumb.classList.add("loaded");
     npThumb.onerror = () => npThumb.classList.remove("loaded");
