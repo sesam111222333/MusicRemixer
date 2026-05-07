@@ -103,94 +103,135 @@ let stemVuRafId = null;
 
 // ─── Master clock sync ───
 //
-// The multitrack library's internal sync loop drifts after seeks because
-// each wavesurfer's HTML audio element finishes its seek operation at a
-// slightly different sample boundary. This module-level RAF loop reads
-// wavesurfers[0] as the master and forces any slave that drifts beyond
-// the threshold to snap back. After a manual seek (clicking the ruler),
-// the native HTMLMediaElement 'seeked' event also triggers an immediate
-// re-sync so the user never hears the tracks separate.
+// The multitrack library's `setTime()` calls `setTime()` on every child
+// wavesurfer back-to-back, which seeks each underlying HTML audio
+// element concurrently. Each one finishes seeking at a slightly
+// different sample boundary, leaving the tracks audibly out of sync
+// after every playhead move. The fix here patches setTime() and play()
+// to do a proper pause → seek-all → wait-for-seeked → resume-all dance,
+// so all tracks land on the same sample boundary AND start playback in
+// the same animation frame.
 
-const MASTER_SYNC_DRIFT = 0.04; // 40 ms — below human flam perception (~50ms)
-const SEEK_RESYNC_DELAY = 80;   // ms after 'seeked' before forcing sync
-
-let _masterClockRafId = null;
+const HARD_DRIFT_SEC = 0.12;   // re-sync if any slave drifts past this
+const SEEK_SETTLE_MS = 300;    // safety timeout for 'seeked' wait
 let _masterClockCleanup = null;
 
-function _wsMediaEl(ws) {
+function _mediaEl(ws) {
   try { return ws?.getMediaElement?.() ?? null; } catch { return null; }
 }
 
-function _wsTime(ws) {
-  const el = _wsMediaEl(ws);
-  if (el) return el.currentTime;
-  return ws?.getCurrentTime?.() ?? 0;
+function _waitSeeked(el) {
+  // Resolves when the media element finishes its current seek operation.
+  // If it isn't seeking, resolves immediately. A safety timeout protects
+  // against browsers that occasionally drop the 'seeked' event after an
+  // aborted seek (e.g. the user starts dragging mid-seek).
+  if (!el || !el.seeking) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      el.removeEventListener("seeked", done);
+      clearTimeout(t);
+      resolve();
+    };
+    el.addEventListener("seeked", done);
+    const t = setTimeout(done, SEEK_SETTLE_MS);
+  });
+}
+
+function _seekAll(wsArr, time) {
+  for (const ws of wsArr) {
+    const el = _mediaEl(ws);
+    if (el) el.currentTime = time;
+  }
 }
 
 function stopMasterClock() {
-  if (_masterClockRafId !== null) {
-    cancelAnimationFrame(_masterClockRafId);
-    _masterClockRafId = null;
-  }
   if (_masterClockCleanup) {
     _masterClockCleanup();
     _masterClockCleanup = null;
   }
 }
 
-function startMasterClock(wsArr) {
+function startMasterClock(mt, wsArr) {
   stopMasterClock();
-  if (!wsArr || wsArr.length < 2) return;
-  const master = wsArr[0];
-  const masterEl = _wsMediaEl(master);
+  if (!mt || !wsArr || wsArr.length < 2) return;
 
-  function syncSlavesTo(targetTime) {
-    for (let i = 1; i < wsArr.length; i++) {
-      const ws = wsArr[i];
-      if (!ws) continue;
-      const drift = Math.abs(_wsTime(ws) - targetTime);
-      if (drift > MASTER_SYNC_DRIFT) {
-        try { ws.setTime(targetTime); } catch { /* ignore */ }
+  const originalSetTime = mt.setTime?.bind(mt);
+  const originalPlay = mt.play?.bind(mt);
+
+  // Atomic pause → seek → settle → resume. Bypasses the per-wavesurfer
+  // setTime calls in the bundle so all media elements seek at once and
+  // resume in the same animation frame.
+  mt.setTime = (time) => {
+    const wasPlaying = mt.isPlaying?.() ?? false;
+
+    if (wasPlaying) {
+      for (const ws of wsArr) {
+        const el = _mediaEl(ws);
+        if (el && !el.paused) el.pause();
       }
     }
-  }
 
-  // Native 'seeked' fires once the HTML audio element settles after a
-  // seek -- this is the moment we know the master's currentTime is
-  // final and we can drag every slave to match.
-  let seekTimer = null;
-  function onSeeked() {
-    if (seekTimer) clearTimeout(seekTimer);
-    seekTimer = setTimeout(() => {
-      const t = _wsTime(master);
-      // Force-sync ignoring the drift threshold so even sub-40ms
-      // gaps left over from a manual seek get cleaned up.
-      for (let i = 1; i < wsArr.length; i++) {
-        try { wsArr[i]?.setTime(t); } catch { /* ignore */ }
-      }
-    }, SEEK_RESYNC_DELAY);
-  }
+    _seekAll(wsArr, time);
 
-  if (masterEl) {
-    masterEl.addEventListener("seeked", onSeeked);
-  }
+    if (!wasPlaying) {
+      // Even when paused, fall through to originalSetTime so the bundle's
+      // internal currentTime cache stays consistent with the media elements.
+      try { originalSetTime?.(time); } catch { /* ignore */ }
+      return;
+    }
 
-  _masterClockCleanup = () => {
-    if (seekTimer) clearTimeout(seekTimer);
-    if (masterEl) masterEl.removeEventListener("seeked", onSeeked);
+    Promise.all(wsArr.map((ws) => _waitSeeked(_mediaEl(ws)))).then(() => {
+      // Resume them all in the same animation frame so jitter between
+      // play() calls is < 16 ms.
+      requestAnimationFrame(() => {
+        for (const ws of wsArr) {
+          const el = _mediaEl(ws);
+          if (el && el.paused) el.play().catch(() => { /* ignore autoplay block */ });
+        }
+      });
+    });
   };
 
-  // Continuous drift correction during playback. We deliberately skip
-  // the correction while paused -- a paused track should NOT be seeked
-  // every frame just because of a 50ms residual offset; that would
-  // generate constant audible clicks if the user resumed mid-frame.
-  function tick() {
-    if (master.isPlaying?.()) {
-      syncSlavesTo(_wsTime(master));
+  // Before the bundle issues play() to each wavesurfer, snap every slave
+  // to wavesurfers[0]'s currentTime. Otherwise stop+start can resume
+  // tracks at slightly different positions if a previous seek didn't
+  // settle exactly.
+  mt.play = (...args) => {
+    const masterEl = _mediaEl(wsArr[0]);
+    if (masterEl) {
+      const t = masterEl.currentTime;
+      for (let i = 1; i < wsArr.length; i++) {
+        const el = _mediaEl(wsArr[i]);
+        if (el && Math.abs(el.currentTime - t) > 0.005) el.currentTime = t;
+      }
     }
-    _masterClockRafId = requestAnimationFrame(tick);
-  }
-  _masterClockRafId = requestAnimationFrame(tick);
+    return originalPlay?.(...args);
+  };
+
+  // Periodic drift safety net. Catastrophic drift (> 120 ms) shouldn't
+  // happen in normal playback, but if it does -- e.g. one element
+  // stalled briefly waiting for buffer -- a gentle re-sync via the
+  // patched setTime will recover without the user having to stop/start.
+  const driftCheckId = setInterval(() => {
+    if (!mt.isPlaying?.()) return;
+    const masterEl = _mediaEl(wsArr[0]);
+    if (!masterEl) return;
+    const masterT = masterEl.currentTime;
+    for (let i = 1; i < wsArr.length; i++) {
+      const el = _mediaEl(wsArr[i]);
+      if (!el) continue;
+      if (Math.abs(el.currentTime - masterT) > HARD_DRIFT_SEC) {
+        mt.setTime(masterT);
+        return;
+      }
+    }
+  }, 2000);
+
+  _masterClockCleanup = () => {
+    clearInterval(driftCheckId);
+    if (originalSetTime) mt.setTime = originalSetTime;
+    if (originalPlay) mt.play = originalPlay;
+  };
 }
 
 function isAudioBufferLike(value) {
@@ -732,7 +773,7 @@ export function wireUpAudio(jobId, stems, duration, thumbnail) {
     const wsArr = mt.wavesurfers || mt._wavesurfers;
     const ws = wsArr?.[0];
     if (!ws) return;
-    startMasterClock(wsArr);
+    startMasterClock(mt, wsArr);
 
     let loopWrapLogged = false;
     ws.on("timeupdate", (t) => {
