@@ -2,7 +2,7 @@ import {
   playBtn, loopBtn, multitrack, loopEnabled, loopStart, loopEnd,
   setLoopStart, setLoopEnd,
 } from "./state.js";
-import { renderEmptyShell } from "./player.js";
+import { renderEmptyShell, rearmLoopWrap } from "./player.js";
 import { wireJobForm } from "./job.js";
 import { wireTransportButtons } from "./transport.js";
 import { togglePlayPause, updateLoopRegionVisual } from "./transport.js";
@@ -38,10 +38,12 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     setLoopStart(Math.min(multitrack.getCurrentTime(), loopEnd - 0.5));
     updateLoopRegionVisual();
+    rearmLoopWrap();
   } else if (e.code === "KeyO" && loopEnabled && multitrack) {
     e.preventDefault();
     setLoopEnd(Math.max(multitrack.getCurrentTime(), loopStart + 0.5));
     updateLoopRegionVisual();
+    rearmLoopWrap();
   }
 });
 

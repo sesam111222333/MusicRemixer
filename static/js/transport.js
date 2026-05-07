@@ -9,6 +9,7 @@ import {
   setLoopEnabled, setLoopStart, setLoopEnd, setMasterVolume, setWaveZoom,
 } from "./state.js";
 import { applyMix } from "./mixer.js";
+import { rearmLoopWrap } from "./player.js";
 
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 32;
@@ -206,6 +207,7 @@ export function toggleLoop() {
   setLoopEnabled(!loopEnabled);
   loopBtn.classList.toggle("active", loopEnabled);
   updateLoopRegionVisual();
+  rearmLoopWrap();
 }
 
 // Plain click-to-seek on the ruler or waveform body. Loop regions can

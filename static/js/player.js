@@ -6,7 +6,7 @@ import {
 } from "./constants.js";
 import {
   mixerEl, multitrackContainer, bpmChip, keyChip, stemsChip, timeEl,
-  titleEl, npThumb, rulerTime, wavesGrid, playBtn,
+  titleEl, npThumb, rulerTime, wavesGrid, playBtn, playMiniBtn,
   stopBtn, loopBtn, loopRegionEl,
   multitrack, currentJobId, trackIndex, totalDuration, loopEnabled,
   loopStart, loopEnd, trackAnalysers,
@@ -128,8 +128,10 @@ let stemVuRafId = null;
 // These are non-private and stable across the bundle versions we ship.
 
 const RESUME_LOOKAHEAD = 0.04;   // 40 ms — covers worst-case task latency
-const HARD_DRIFT_SEC = 0.12;     // safety net only
 let _masterClockCleanup = null;
+let _activeMt = null;
+let _activeEls = null;
+let _loopWrapTimerId = null;
 
 function _mediaEl(ws) {
   try { return ws?.getMediaElement?.() ?? null; } catch { return null; }
@@ -142,11 +144,39 @@ function _isWebAudioPlayer(el) {
   return !!(el && el.audioContext && el.buffer && el.gainNode);
 }
 
+function _patchCurrentTime(els) {
+  // bufferNode.start(t0, ...) schedules audio to begin at t0 = now + 40 ms.
+  // Until t0 actually arrives, ctx.currentTime - playStartTime is negative,
+  // and the bundle's `currentTime` getter returns playedDuration - 40 ms.
+  // That makes the playhead jump backwards on every play/seek. Clamp the
+  // getter to never report a value below playedDuration.
+  for (const el of els) {
+    const proto = Object.getPrototypeOf(el);
+    const desc = Object.getOwnPropertyDescriptor(proto, "currentTime");
+    if (!desc?.get) continue;
+    const origGet = desc.get;
+    Object.defineProperty(el, "currentTime", {
+      configurable: true,
+      get() {
+        const v = origGet.call(this);
+        return v < this.playedDuration ? this.playedDuration : v;
+      },
+    });
+  }
+}
+
+function _unpatchCurrentTime(els) {
+  for (const el of els) {
+    try { delete el.currentTime; } catch { /* ignore */ }
+  }
+}
+
 function _atomicPauseAll(els) {
   // Stop every active bufferNode in the same JS task and update each
-  // player's playedDuration to reflect "where it actually was". This is
-  // what _pause() does internally; we inline it so we don't pay the
-  // per-call audioContext.currentTime read drift.
+  // player's playedDuration to reflect "where it actually was". Math.max
+  // guards against the lookahead window: if we pause within 40 ms of a
+  // resume, ctx.currentTime - playStartTime is negative and would
+  // *decrease* playedDuration, restarting before the user's intent.
   if (!els.length) return;
   const ctx = els[0].audioContext;
   const now = ctx?.currentTime ?? 0;
@@ -154,12 +184,8 @@ function _atomicPauseAll(els) {
     if (el.paused) continue;
     el.paused = true;
     try { el.bufferNode?.stop(); } catch { /* ignore */ }
-    el.playedDuration += now - el.playStartTime;
+    el.playedDuration += Math.max(0, now - el.playStartTime);
   }
-}
-
-function _atomicSeekAll(els, time) {
-  for (const el of els) el.playedDuration = time;
 }
 
 function _atomicResumeAll(els) {
@@ -170,11 +196,6 @@ function _atomicResumeAll(els) {
   // accurate sync, regardless of how long the JS scheduling loop took.
   if (!els.length) return;
   const ctx = els[0].audioContext;
-  if (ctx.state === "suspended") {
-    // Resume is async — but we don't await it because scheduling at
-    // ctx.currentTime + lookahead still works while resuming.
-    ctx.resume().catch(() => { /* ignore */ });
-  }
   const t0 = ctx.currentTime + RESUME_LOOKAHEAD;
   for (const el of els) {
     if (!el.paused) continue;
@@ -184,6 +205,20 @@ function _atomicResumeAll(els) {
     node.buffer = el.buffer;
     node.connect(el.gainNode);
     if (el.playedDuration >= el.duration) el.playedDuration = 0;
+    // Mirror the bundle's natural-end lifecycle: when a track plays through
+    // to its full duration the bufferNode emits `ended`, and the bundle
+    // expects pause + emit("ended") to fire so transport state updates. Our
+    // re-created nodes need the same handler — without it, the play button
+    // stays stuck in "playing" past the end of the song.
+    node.onended = () => {
+      if (el.bufferNode !== node || el.paused) return;
+      const live = el.playedDuration + el.audioContext.currentTime - el.playStartTime;
+      if (live < el.duration - 0.01) return;  // user-initiated stop, not natural end
+      el.paused = true;
+      el.playedDuration = el.duration;
+      try { el.emit?.("pause"); } catch { /* ignore */ }
+      try { el.emit?.("finish"); } catch { /* ignore */ }
+    };
     node.start(t0, el.playedDuration);
     el.bufferNode = node;
     el.playStartTime = t0;
@@ -193,11 +228,67 @@ function _atomicResumeAll(els) {
   }
 }
 
+function _clearLoopWrap() {
+  if (_loopWrapTimerId !== null) {
+    clearTimeout(_loopWrapTimerId);
+    _loopWrapTimerId = null;
+  }
+}
+
+// Pre-schedule the loop wrap on the audio clock so it doesn't have to wait
+// for the next RAF "timeupdate" tick (which adds up to 16 ms of latency on
+// top of the 40 ms resume-lookahead). We can't make the wrap itself sample-
+// accurate without rebuilding the bufferSource pipeline, but firing the
+// setTime() call exactly when audio reaches loopEnd minimises the audible
+// tail.
+function _scheduleLoopWrap() {
+  _clearLoopWrap();
+  const mt = _activeMt;
+  const els = _activeEls;
+  if (!mt || !els?.length) return;
+  if (!loopEnabled || !mt.isPlaying?.()) return;
+  if (!(loopEnd > loopStart)) return;
+
+  const m = els[0];
+  const ctx = m.audioContext;
+  const elapsed = Math.max(0, ctx.currentTime - m.playStartTime);
+  const livePos = m.playedDuration + elapsed;
+
+  if (livePos >= loopEnd) {
+    // Already past loopEnd — wrap immediately. Defer to a microtask so we
+    // don't recurse into setTime from inside a state mutation.
+    queueMicrotask(() => {
+      if (loopEnabled && mt.isPlaying?.()) mt.setTime(loopStart);
+    });
+    return;
+  }
+
+  // Fire 1 ms early so the timer never undershoots into a "loopEnd has
+  // already passed" state when it runs.
+  const remainingMs = Math.max(0, (loopEnd - livePos) * 1000 - 1);
+  _loopWrapTimerId = setTimeout(() => {
+    _loopWrapTimerId = null;
+    if (loopEnabled && mt.isPlaying?.()) mt.setTime(loopStart);
+  }, remainingMs);
+}
+
+// Called from transport.js / main.js when loop bounds or enabled state
+// change while playback is active. Re-runs the wrap scheduler so the timer
+// reflects the new bounds without requiring a full setTime(currentTime)
+// re-schedule (which would add an audible 40 ms gap on every keystroke).
+export function rearmLoopWrap() {
+  _scheduleLoopWrap();
+}
+
 function stopMasterClock() {
+  _clearLoopWrap();
+  if (_activeEls) _unpatchCurrentTime(_activeEls);
   if (_masterClockCleanup) {
     _masterClockCleanup();
     _masterClockCleanup = null;
   }
+  _activeMt = null;
+  _activeEls = null;
 }
 
 function startMasterClock(mt, wsArr) {
@@ -210,24 +301,35 @@ function startMasterClock(mt, wsArr) {
   const els = wsArr.map(_mediaEl).filter(Boolean);
   if (!els.length || !els.every(_isWebAudioPlayer)) return;
 
+  _patchCurrentTime(els);
+  _activeMt = mt;
+  _activeEls = els;
+
   const originalSetTime = mt.setTime?.bind(mt);
   const originalPlay = mt.play?.bind(mt);
   const originalPause = mt.pause?.bind(mt);
 
   mt.setTime = (time) => {
     const wasPlaying = mt.isPlaying?.() ?? false;
+    _clearLoopWrap();
     _atomicPauseAll(els);
-    _atomicSeekAll(els, time);
+    for (const el of els) el.playedDuration = time;
     if (wasPlaying) {
       _atomicResumeAll(els);
+      _scheduleLoopWrap();
     }
   };
 
   mt.play = () => {
+    // No-op when every track is already playing. Without this guard a stray
+    // play() call (double-click, external integration) would tear down the
+    // bufferNodes and reschedule, introducing an audible micro-gap.
+    if (els.every((el) => !el.paused)) return;
     // Snap all to track 0 first, then schedule everything at the same t0.
-    const t = els[0].paused
-      ? els[0].playedDuration
-      : els[0].playedDuration + (els[0].audioContext.currentTime - els[0].playStartTime);
+    // Math.max keeps us above playedDuration during the lookahead window.
+    const live = els[0].playedDuration
+      + Math.max(0, els[0].audioContext.currentTime - els[0].playStartTime);
+    const t = els[0].paused ? els[0].playedDuration : live;
     for (const el of els) el.playedDuration = t;
     // Mark all paused so _atomicResumeAll will start them.
     for (const el of els) {
@@ -237,9 +339,11 @@ function startMasterClock(mt, wsArr) {
       }
     }
     _atomicResumeAll(els);
+    _scheduleLoopWrap();
   };
 
   mt.pause = () => {
+    _clearLoopWrap();
     _atomicPauseAll(els);
     // Notify the wavesurfer event listeners so the UI play/pause button
     // updates correctly. The bundle's own pause() emits these per track.
@@ -248,25 +352,7 @@ function startMasterClock(mt, wsArr) {
     }
   };
 
-  // Safety net: very rarely an underlying buffer node can finish early
-  // (e.g. clipped audio buffer). If any track drifts > HARD_DRIFT_SEC
-  // from the master, do a clean re-sync via the patched setTime.
-  const driftCheckId = setInterval(() => {
-    if (!mt.isPlaying?.()) return;
-    const m = els[0];
-    const masterT = m.playedDuration + (m.audioContext.currentTime - m.playStartTime);
-    for (let i = 1; i < els.length; i++) {
-      const e = els[i];
-      const slaveT = e.playedDuration + (e.audioContext.currentTime - e.playStartTime);
-      if (Math.abs(slaveT - masterT) > HARD_DRIFT_SEC) {
-        mt.setTime(masterT);
-        return;
-      }
-    }
-  }, 2000);
-
   _masterClockCleanup = () => {
-    clearInterval(driftCheckId);
     if (originalSetTime) mt.setTime = originalSetTime;
     if (originalPlay) mt.play = originalPlay;
     if (originalPause) mt.pause = originalPause;
@@ -772,6 +858,13 @@ export function wireUpAudio(jobId, stems, duration, thumbnail) {
   clearOverviewWaveforms();
   renderAllDecodedVisuals(stems, token);
 
+  // Disable play until canplay fires. Without the master clock installed,
+  // the bundle's original mt.play() iterates audios[i]._play() sequentially
+  // and each call captures audioContext.currentTime at a slightly different
+  // instant — exactly the desync this whole subsystem exists to prevent.
+  if (playBtn) playBtn.disabled = true;
+  if (playMiniBtn) playMiniBtn.disabled = true;
+
   setTrackIndex(Object.fromEntries(stems.map((s, i) => [s.name, i])));
   multitrackContainer.innerHTML = "";
   const mt = Multitrack.create(
@@ -847,21 +940,19 @@ export function wireUpAudio(jobId, stems, duration, thumbnail) {
     const ws = wsArr?.[0];
     if (!ws) return;
     startMasterClock(mt, wsArr);
+    if (playBtn) playBtn.disabled = false;
+    if (playMiniBtn) playMiniBtn.disabled = false;
 
-    let loopWrapLogged = false;
     ws.on("timeupdate", (t) => {
       timeEl.textContent = `${fmtTime(t)} / ${fmtTime(totalDuration)}`;
       updatePlayheadMarker(t);
       updateFooterTimes(t);
       updatePresencePlayhead(t);
       updateStopVisual();
+      // Defensive fallback: the audio-clock-pinned scheduleLoopWrap timer
+      // is the primary mechanism, but if a tab gets backgrounded the timer
+      // may fire late. Catch any drift past loopEnd here.
       if (loopEnabled && totalDuration > 0 && t >= loopEnd) {
-        if (!loopWrapLogged) {
-          console.log(
-            `[loop] wrap fired: t=${t.toFixed(3)} loopStart=${loopStart.toFixed(3)} loopEnd=${loopEnd.toFixed(3)}`,
-          );
-          loopWrapLogged = true; // log once per session, not every frame
-        }
         mt.setTime(loopStart);
       }
     });
