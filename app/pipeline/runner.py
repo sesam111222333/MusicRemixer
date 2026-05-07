@@ -24,6 +24,14 @@ logger = logging.getLogger("stemdeck.pipeline")
 _pipeline_lock = asyncio.Semaphore(1)
 
 
+def _record_stats(job: Job, status: str) -> None:
+    try:
+        from app.core.stats import record_completion
+        record_completion(job.id, job.title, status)
+    except Exception:
+        pass  # stats are best-effort
+
+
 def _check_cancel(job: Job) -> None:
     if job.cancel_requested:
         raise JobCancelled()
@@ -105,8 +113,10 @@ async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
             return
         logger.exception("pipeline failed for job %s", job.id)
         _set(job, status="error", stage=f"Error: {e}", error=str(e))
+        _record_stats(job, "error")
         return
     _set(job, status="done", progress=1.0, stage="Done")
+    _record_stats(job, "done")
 
 
 def _validate_audio(source: Path) -> float:
@@ -179,5 +189,7 @@ async def run_pipeline_from_file(job: Job, source: Path, jobs_dir: Path) -> None
             return
         logger.exception("pipeline failed for job %s", job.id)
         _set(job, status="error", stage=f"Error: {e}", error=str(e))
+        _record_stats(job, "error")
         return
     _set(job, status="done", progress=1.0, stage="Done")
+    _record_stats(job, "done")
