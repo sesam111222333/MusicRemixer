@@ -10,7 +10,6 @@ import {
 } from "./state.js";
 import { applyMix } from "./mixer.js";
 
-const MIN_LOOP_SEC = 0.2;
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 32;
 const ZOOM_STEP = 1.25;
@@ -209,70 +208,22 @@ export function toggleLoop() {
   updateLoopRegionVisual();
 }
 
-// Click-drag on the timeline ruler or waveform body to define the loop
-// region. Drag direction doesn't matter -- start and end get sorted.
-// Tiny drags are treated as clicks and seek the playhead instead.
-function wireLoopDrag() {
-  let dragging = false;
-  let dragStartTime = 0;
-  let activePointerId = null;
-  let moved = false;
-
-  const startDrag = (e, surface) => {
-    if (e.button !== 0 || e.target.closest(".loop-region")) return;
-    const t = timeFromClientX(e.clientX);
-    if (t === null) return;
-    dragging = true;
-    activePointerId = e.pointerId;
-    moved = false;
-    dragStartTime = t;
-    setLoopStart(t);
-    setLoopEnd(t);
-    setLoopEnabled(true);
-    loopBtn.classList.add("active");
-    updateLoopRegionVisual();
-    surface.setPointerCapture(e.pointerId);
-    e.preventDefault();
-  };
-
-  const moveDrag = (e) => {
-    if (!dragging || e.pointerId !== activePointerId) return;
-    const t = timeFromClientX(e.clientX);
-    if (t === null) return;
-    if (Math.abs(t - dragStartTime) >= MIN_LOOP_SEC) moved = true;
-    if (t < dragStartTime) {
-      setLoopStart(t);
-      setLoopEnd(dragStartTime);
-    } else {
-      setLoopStart(dragStartTime);
-      setLoopEnd(t);
-    }
-    updateLoopRegionVisual();
-  };
-
-  const finishDrag = (e) => {
-    if (!dragging || e.pointerId !== activePointerId) return;
-    dragging = false;
-    activePointerId = null;
-    const clicked = !moved || loopEnd - loopStart < MIN_LOOP_SEC;
-    if (clicked) {
-      setLoopEnabled(false);
-      loopBtn.classList.remove("active");
-      updateLoopRegionVisual();
-      setPlayheadTime(dragStartTime);
-    }
-  };
-
+// Plain click-to-seek on the ruler or waveform body. Loop regions can
+// still be set via the I/O keyboard shortcuts (and toggled with L) --
+// the drag-selection UI was removed because it was easy to trigger
+// accidentally while scrolling.
+function wireRulerClick() {
   const wavesColumn = document.querySelector(".waves-column");
   const surfaces = [rulerTime, wavesColumn].filter(Boolean);
   for (const surface of surfaces) {
-    surface.addEventListener("pointerdown", (e) => {
+    surface.addEventListener("click", (e) => {
+      if (e.button !== 0) return;
       if (surface === rulerTime && e.target !== rulerTime) return;
-      startDrag(e, surface);
+      if (e.target.closest(".loop-region")) return;
+      const t = timeFromClientX(e.clientX);
+      if (t === null) return;
+      setPlayheadTime(t);
     });
-    surface.addEventListener("pointermove", moveDrag);
-    surface.addEventListener("pointerup", finishDrag);
-    surface.addEventListener("pointercancel", finishDrag);
   }
 }
 
@@ -393,7 +344,7 @@ export function wireTransportButtons() {
   playMiniBtn?.addEventListener("click", togglePlayPause);
   stopBtn.addEventListener("click", stopTransport);
   loopBtn.addEventListener("click", toggleLoop);
-  wireLoopDrag();
+  wireRulerClick();
   wireZoomButtons();
   masterFader?.addEventListener("input", () => {
     setMasterVolume(parseFloat(masterFader.value));

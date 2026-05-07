@@ -778,6 +778,13 @@ export function wireUpAudio(jobId, stems, duration, thumbnail) {
         progressColor: PROGRESS_COLOR,
         height: 48,
         cursorWidth: 0,
+        // Disable per-waveform click-to-seek. The bundle would
+        // otherwise let a click on (say) the drums waveform call
+        // setTime on JUST that wavesurfer's media — which reschedules
+        // its bufferNode at a NEW t0 and immediately desyncs from the
+        // others. All seeks must go through mt.setTime so the master
+        // clock can resume every track at a shared t0.
+        interact: false,
       },
     })),
     {
