@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+import subprocess
 from pathlib import Path
 
 from app.core.models import Job, JobCancelled
@@ -108,8 +109,19 @@ async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
     _set(job, status="done", progress=1.0, stage="Done")
 
 
+def _validate_audio(source: Path) -> None:
+    result = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-show_streams", "-select_streams", "a", str(source)],
+        capture_output=True,
+        timeout=15,
+    )
+    if result.returncode != 0 or b"codec_type=audio" not in result.stdout:
+        raise ValueError("Uploaded file is not a valid audio file")
+
+
 def _run_blocking_from_file(job: Job, source: Path, job_dir: Path) -> None:
     _check_cancel(job)
+    _validate_audio(source)
     analyze(job, source)
     _check_cancel(job)
     stems_root = separate(job, source, job_dir)
