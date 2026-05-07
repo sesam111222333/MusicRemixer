@@ -24,6 +24,7 @@ dependencies = [
     # post-analysis loudness card. Pure Python, depends on scipy which
     # librosa already pulls in.
     "pyloudnorm>=0.1.1",
+    "python-multipart>=0.0.27",
 ]
 
 [project.optional-dependencies]

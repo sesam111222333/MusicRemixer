@@ -106,3 +106,50 @@ async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
         _set(job, status="error", stage=f"Error: {e}", error=str(e))
         return
     _set(job, status="done", progress=1.0, stage="Done")
+
+
+def _run_blocking_from_file(job: Job, source: Path, job_dir: Path) -> None:
+    _check_cancel(job)
+    analyze(job, source)
+    _check_cancel(job)
+    stems_root = separate(job, source, job_dir)
+    found = collect(job, stems_root, job_dir)
+    stems_dir = job_dir / "stems"
+    cleanup_source(job_dir)
+    job.stems = [{"name": name, "url": f"/api/jobs/{job.id}/stems/{name}.wav"} for name in found]
+    _check_cancel(job)
+    _set(job, stage="Mixing tracks...")
+    original_path = make_original_track(job, job_dir, stems_dir)
+    if original_path is not None:
+        job.stems.insert(0, {"name": "original", "url": f"/api/jobs/{job.id}/stems/original.wav"})
+    _check_cancel(job)
+    mix_path = make_selected_mix(job, stems_dir, found)
+    if mix_path is not None:
+        job.mix_url = f"/api/jobs/{job.id}/stems/{mix_path.name}"
+    _check_cancel(job)
+
+
+async def run_pipeline_from_file(job: Job, source: Path, jobs_dir: Path) -> None:
+    job_dir = jobs_dir / job.id
+    try:
+        await asyncio.to_thread(sweep_old_jobs, jobs_dir)
+        _set(job, status="analyzing", progress=0.0, stage="Analyzing...")
+        async with _pipeline_lock:
+            await asyncio.to_thread(_run_blocking_from_file, job, source, job_dir)
+    except JobCancelled:
+        logger.info("pipeline cancelled for job %s", job.id)
+        _set(job, status="cancelled", stage="Cancelled")
+        if job_dir.is_dir():
+            shutil.rmtree(job_dir, ignore_errors=True)
+        return
+    except Exception as e:
+        if job.cancel_requested:
+            logger.info("pipeline cancelled (wrapped) for job %s", job.id)
+            _set(job, status="cancelled", stage="Cancelled")
+            if job_dir.is_dir():
+                shutil.rmtree(job_dir, ignore_errors=True)
+            return
+        logger.exception("pipeline failed for job %s", job.id)
+        _set(job, status="error", stage=f"Error: {e}", error=str(e))
+        return
+    _set(job, status="done", progress=1.0, stage="Done")

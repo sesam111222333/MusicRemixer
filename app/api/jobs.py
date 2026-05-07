@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import uuid
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.core.config import JOBS_DIR, STEM_NAMES
@@ -15,17 +17,17 @@ from app.core.registry import register as registry_register
 from app.core.registry import remove as registry_remove
 from app.pipeline import run_pipeline
 from app.pipeline.download import InvalidYouTubeURL, validate_youtube_url
+from app.pipeline.runner import run_pipeline_from_file
 
 router = APIRouter(tags=["jobs"])
+
+_ALLOWED_EXTS = frozenset(
+    (".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".opus", ".webm", ".wma")
+)
 
 
 class JobRequest(BaseModel):
     url: str
-    # Subset of stems to include in the post-processing "selected mix"
-    # audio file. None = all 6 (no extra mix produced; would equal the
-    # original). Unknown stem names are dropped silently rather than
-    # rejected, so a future model with extra stems doesn't break older
-    # clients pinning the old set.
     stems: list[str] | None = None
 
 
@@ -36,10 +38,43 @@ async def create_job(payload: JobRequest) -> dict[str, str]:
     except InvalidYouTubeURL as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     selected = [s for s in payload.stems if s in STEM_NAMES] if payload.stems else list(STEM_NAMES)
-    if not selected:  # everything was unknown -- treat as full set
+    if not selected:
         selected = list(STEM_NAMES)
     job = registry_register(Job(id=uuid.uuid4().hex[:12], selected_stems=selected))
     asyncio.create_task(run_pipeline(job, url, JOBS_DIR))
+    return {"job_id": job.id}
+
+
+@router.post("/upload")
+async def create_job_from_upload(
+    file: UploadFile = File(...),
+    stems: str | None = Form(None),
+) -> dict[str, str]:
+    selected = list(STEM_NAMES)
+    if stems:
+        try:
+            parsed = json.loads(stems)
+            if isinstance(parsed, list):
+                selected = [s for s in parsed if s in STEM_NAMES] or list(STEM_NAMES)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    ext = Path(file.filename or "upload").suffix.lower()
+    if ext not in _ALLOWED_EXTS:
+        raise HTTPException(status_code=422, detail=f"Unsupported file type: {ext or '(none)'}")
+
+    job = registry_register(Job(id=uuid.uuid4().hex[:12], selected_stems=selected))
+    job.title = Path(file.filename or "upload").stem
+
+    job_dir = JOBS_DIR / job.id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    source_path = job_dir / f"source{ext}"
+
+    with source_path.open("wb") as out:
+        while chunk := await file.read(8 * 1024 * 1024):
+            out.write(chunk)
+
+    asyncio.create_task(run_pipeline_from_file(job, source_path, JOBS_DIR))
     return {"job_id": job.id}
 
 
@@ -57,11 +92,8 @@ def cancel_job(job_id: str) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if job.status in ("done", "error", "cancelled"):
-        # Already terminal -- return current state without touching anything.
         return job.to_state()
     job.cancel_requested = True
-    # If Demucs is the current stage, terminate it immediately so the read
-    # loop hits EOF and the runner translates that into a `cancelled` state.
     proc = registry_get_proc(job_id)
     if proc is not None and proc.poll() is None:
         proc.terminate()

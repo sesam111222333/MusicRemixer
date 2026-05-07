@@ -5,6 +5,12 @@ import { STEM_NAMES } from "./constants.js";
 
 export const form = $("job-form");
 export const urlInput = $("url");
+export const fileInput = $("file-upload");
+export const tabUrl = $("tab-url");
+export const tabFile = $("tab-file");
+export const urlPanel = $("url-panel");
+export const filePanel = $("file-panel");
+export const fileNameDisplay = $("file-name-display");
 export const submitBtn = $("submit");
 
 export const playBtn = $("t-play");

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>StemDeck</title>
+    <title>Music Remixer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -26,15 +26,25 @@
       <header class="appbar">
         <div class="brand-group">
           <div class="brand-row">
-            <h1 class="brand">StemDeck</h1>
+            <h1 class="brand">Music Remixer</h1>
             <span class="beta-badge">ALPHA</span>
           </div>
-          <span class="brand-sub">AI stem separation for YouTube</span>
+          <span class="brand-sub">AI stem separation</span>
         </div>
 
         <form id="job-form" class="appbar-import-panel">
+          <div class="source-mode-tabs">
+            <button class="source-tab" id="tab-url" type="button" aria-pressed="true">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L11.5 4.43"/><path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07l1.33-1.33"/></svg>
+              YouTube
+            </button>
+            <button class="source-tab" id="tab-file" type="button" aria-pressed="false">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Upload file
+            </button>
+          </div>
           <div class="import-input-row">
-            <label class="url-wrap">
+            <label class="url-wrap" id="url-panel">
               <svg class="url-prefix" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L11.5 4.43"></path>
                 <path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07l1.33-1.33"></path>
@@ -43,10 +53,14 @@
                 id="url"
                 type="url"
                 placeholder="Paste a YouTube link here..."
-                required
                 autocomplete="off"
                 spellcheck="false"
               />
+            </label>
+            <label class="file-wrap hidden" id="file-panel">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <span class="file-label"><span id="file-name-display">Drop audio file or browse</span></span>
+              <input id="file-upload" type="file" accept=".mp3,.wav,.flac,.m4a,.ogg,.aac,.opus,.webm,.wma" class="file-input-hidden" />
             </label>
             <button id="submit" class="btn-primary" type="submit">
               <svg class="icon" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -376,27 +390,7 @@
             </div>
             <span id="footer-time-total">00:00</span>
           </div>
-          <div class="footer-actions">
-            <a class="footer-btn" href="https://github.com/thcp/stemdeck/issues" target="_blank" rel="noopener noreferrer">
-              <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                <circle cx="12" cy="12" r="10"></circle>
-                <path d="M9.1 9a3 3 0 1 1 5.8 1c-.7 1.2-2.2 1.4-2.7 2.8"></path>
-                <path d="M12 17h.01"></path>
-              </svg>
-              <span>Help</span>
-            </a>
-            <a class="footer-btn" href="https://buymeacoffee.com/tha.les" target="_blank" rel="noopener noreferrer">
-              <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M17 8h1a4 4 0 0 1 0 8h-1"></path>
-                <path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4z"></path>
-                <line x1="6" y1="2" x2="6" y2="4"></line>
-                <line x1="10" y1="2" x2="10" y2="4"></line>
-                <line x1="14" y1="2" x2="14" y2="4"></line>
-              </svg>
-              <span>Buy me a coffee</span>
-            </a>
-          </div>
-        </footer>
+          </footer>
       </div>
 
       <footer class="site-footer">
@@ -405,7 +399,6 @@
           <a href="#">Terms of Service</a>
           <span>•</span>
           <a href="#">Privacy Policy</a>
-          <a class="help-btn" href="https://github.com/thcp/stemdeck/issues" target="_blank" rel="noopener noreferrer">Help</a>
         </nav>
       </footer>
     </div>

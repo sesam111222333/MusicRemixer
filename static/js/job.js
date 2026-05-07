@@ -1,5 +1,6 @@
 import {
-  form, urlInput, submitBtn, errorEl, jobBox, jobTitleEl, jobStageEl,
+  form, urlInput, fileInput, tabUrl, tabFile, urlPanel, filePanel, fileNameDisplay,
+  submitBtn, errorEl, jobBox, jobTitleEl, jobStageEl,
   jobDetailEl, jobCancelBtn, progressEl, titleEl, bpmChip, keyChip,
   eventSource, setEventSource, setCurrentJobId, currentJobId,
   selectedStems,
