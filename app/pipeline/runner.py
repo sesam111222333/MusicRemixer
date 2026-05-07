@@ -109,19 +109,35 @@ async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
     _set(job, status="done", progress=1.0, stage="Done")
 
 
-def _validate_audio(source: Path) -> None:
+def _validate_audio(source: Path) -> float:
+    """Validate that source is a readable audio file and return its duration in seconds."""
+    import json as _json
     result = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-show_streams", "-select_streams", "a", str(source)],
+        [
+            "ffprobe", "-v", "quiet",
+            "-print_format", "json",
+            "-show_format", "-show_streams", "-select_streams", "a",
+            str(source),
+        ],
         capture_output=True,
         timeout=15,
     )
-    if result.returncode != 0 or b"codec_type=audio" not in result.stdout:
+    if result.returncode != 0:
+        raise ValueError("Uploaded file is not a valid audio file")
+    try:
+        info = _json.loads(result.stdout)
+        if not info.get("streams"):
+            raise ValueError("Uploaded file contains no audio stream")
+        fmt = info.get("format", {})
+        dur = float(fmt.get("duration") or info["streams"][0].get("duration") or 0)
+        return dur
+    except (KeyError, TypeError, ValueError):
         raise ValueError("Uploaded file is not a valid audio file")
 
 
 def _run_blocking_from_file(job: Job, source: Path, job_dir: Path) -> None:
     _check_cancel(job)
-    _validate_audio(source)
+    job.duration_sec = _validate_audio(source)
     analyze(job, source)
     _check_cancel(job)
     stems_root = separate(job, source, job_dir)
