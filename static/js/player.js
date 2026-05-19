@@ -682,7 +682,7 @@ function renderAllDecodedVisuals(stems, token) {
     renderAllOverviewWaveforms(stems, decoded);
     renderStemEnergyBaseline(stems, decoded);
     startStemVuLoop(stems, decoded, token);
-  });
+  }).catch((err) => console.warn("[visuals] renderAllDecodedVisuals:", err));
 }
 
 export function destroyPlayer() {
