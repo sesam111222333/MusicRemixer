@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shutil
@@ -46,13 +47,17 @@ def _separate_demucs(job: Job, source: Path, job_dir: Path) -> Path:
         text=True,
         bufsize=0,
     )
-    if proc.stderr is None:
-        raise RuntimeError("demucs subprocess has no stderr pipe")
+    # Register immediately so a concurrent cancel can terminate the process.
     set_proc(job.id, proc)
 
     buf = ""
     tail: list[str] = []
     try:
+        if proc.stderr is None:
+            raise RuntimeError("demucs subprocess has no stderr pipe")
+        # Cancel may have arrived in the window before registration above.
+        if job.cancel_requested:
+            proc.terminate()
         while True:
             ch = proc.stderr.read(1)
             if not ch:
@@ -110,13 +115,17 @@ def _run_demucs_on_file(job: Job, source: Path, out_dir: Path, model: str, progr
         text=True,
         bufsize=0,
     )
-    if proc.stderr is None:
-        raise RuntimeError("demucs subprocess has no stderr pipe")
+    # Register immediately so a concurrent cancel can terminate the process.
     set_proc(job.id, proc)
 
     buf = ""
     tail: list[str] = []
     try:
+        if proc.stderr is None:
+            raise RuntimeError("demucs subprocess has no stderr pipe")
+        # Cancel may have arrived in the window before registration above.
+        if job.cancel_requested:
+            proc.terminate()
         while True:
             ch = proc.stderr.read(1)
             if not ch:
@@ -168,35 +177,47 @@ def _separate_bsroformer(job: Job, source: Path, job_dir: Path) -> Path:
     2. Demucs htdemucs_ft on the instrumental → drums.wav + bass.wav + other.wav
 
     Assembles the four stems into job_dir/_bsr_stems/ and returns that path.
+
+    Stage 1 runs as a subprocess (_bsr_worker.py) so the cancel API can
+    terminate it at any point — audio_separator.sep.separate() is a blocking
+    in-process call with no cancellation hook of its own.
     """
     from app.pipeline.download import _set
 
-    _set(job, status="separating", progress=0.0, stage="Loading BS-RoFormer model...")
-
-    try:
-        from audio_separator.separator import Separator
-    except ImportError:
-        raise RuntimeError(
-            "audio-separator is not installed. "
-            "Run: pip install audio-separator[gpu] (or audio-separator for CPU-only)"
-        )
+    _set(job, status="separating", progress=0.0, stage="Separating vocals (BS-RoFormer)...")
 
     bsr_tmp = job_dir / "_bsr_tmp"
     bsr_tmp.mkdir(exist_ok=True)
 
+    # Stage 1: run audio-separator as a subprocess so cancel can terminate it.
+    worker = Path(__file__).parent / "_bsr_worker.py"
+    cmd = [
+        sys.executable, str(worker),
+        "--model", BSROFORMER_MODEL,
+        "--output-dir", str(bsr_tmp),
+        str(source),
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # Register immediately so a concurrent cancel can terminate the process.
+    set_proc(job.id, proc)
     try:
-        sep = Separator(output_dir=str(bsr_tmp), output_format="WAV", log_level=logging.WARNING)
-    except TypeError:
-        sep = Separator(output_dir=str(bsr_tmp), output_format="WAV")
-
-    sep.load_model(model_filename=BSROFORMER_MODEL)
-
-    _set(job, progress=0.05, stage="Separating vocals...")
+        # Cancel may have arrived in the window before registration above.
+        if job.cancel_requested:
+            proc.terminate()
+        stdout, stderr = proc.communicate()
+    finally:
+        set_proc(job.id, None)
 
     if job.cancel_requested:
         raise JobCancelled()
+    if proc.returncode != 0:
+        detail = stderr.strip()[-500:] or "(no stderr)"
+        raise RuntimeError(f"audio-separator failed (exit {proc.returncode}): {detail}")
 
-    output_files = sep.separate(str(source))
+    try:
+        output_files: list[str] = json.loads(stdout.strip())
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError(f"audio-separator output could not be parsed: {stdout!r}") from exc
 
     _set(job, progress=0.45, stage="Vocals done — separating instruments...")
 
