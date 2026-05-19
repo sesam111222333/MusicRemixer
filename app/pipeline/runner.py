@@ -171,8 +171,8 @@ async def run_pipeline_from_file(job: Job, source: Path, jobs_dir: Path) -> None
     job_dir = jobs_dir / job.id
     try:
         await asyncio.to_thread(sweep_old_jobs, jobs_dir)
-        _set(job, status="analyzing", progress=0.0, stage="Analyzing...")
         async with _pipeline_lock:
+            _set(job, status="analyzing", progress=0.0, stage="Analyzing...")
             await asyncio.to_thread(_run_blocking_from_file, job, source, job_dir)
     except JobCancelled:
         logger.info("pipeline cancelled for job %s", job.id)
