@@ -429,7 +429,7 @@ export function resetMixer() {
 
 export function muteAll() {
   // Toggle: if every stem is muted, un-mute all; otherwise mute all.
-  const allMuted = STEM_NAMES.every((n) => mixerState[n]?.muted);
+  const allMuted = TRACK_NAMES.every((n) => mixerState[n]?.muted);
   for (const name of TRACK_NAMES) {
     const s = mixerState[name];
     if (!s) continue;
