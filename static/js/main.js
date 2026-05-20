@@ -5,7 +5,7 @@ import {
 import { renderEmptyShell, rearmLoopWrap } from "./player.js";
 import { wireJobForm } from "./job.js";
 import { wireTransportButtons } from "./transport.js";
-import { togglePlayPause, updateLoopRegionVisual } from "./transport.js";
+import { togglePlayPause, updateLoopRegionVisual, applyWaveZoom } from "./transport.js";
 import { wireStemListControls, wireMixerToolbar } from "./mixer.js";
 
 // ─── Wire everything up ───
@@ -45,6 +45,14 @@ document.addEventListener("keydown", (e) => {
     updateLoopRegionVisual();
     rearmLoopWrap();
   }
+});
+
+// Sync loop button and waveform visuals after a session import.
+document.addEventListener("stemdeck:session-imported", () => {
+  loopBtn.classList.toggle("active", loopEnabled);
+  updateLoopRegionVisual();
+  applyWaveZoom();
+  rearmLoopWrap();
 });
 
 // ─── Bootstrap ───

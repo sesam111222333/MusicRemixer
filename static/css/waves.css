@@ -484,7 +484,64 @@
   display: flex;
   justify-content: flex-end;
   align-items: center;
+  gap: 10px;
   margin-bottom: 6px;
+}
+
+.session-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 10px;
+  border-left: 1px solid var(--glass-line);
+}
+
+.session-tools button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--glass-line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #d8dde3;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color var(--t-base) var(--easing);
+}
+
+.session-tools button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.session-tools button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.session-status {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  opacity: 0;
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: opacity 0.2s ease, max-width 0.3s ease;
+}
+
+.session-status.ok {
+  color: #30c557;
+  opacity: 1;
+  max-width: 280px;
+}
+
+.session-status.error {
+  color: #e54e4e;
+  opacity: 1;
+  max-width: 360px;
 }
 
 /* Shared scroll viewport for the ruler + waves. Putting both in the

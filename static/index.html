@@ -273,6 +273,18 @@
                 <button id="zoom-fit" type="button">Fit</button>
                 <button class="kebab hidden" type="button" aria-label="More options">⋮</button>
               </div>
+              <div class="session-tools">
+                <button id="session-export" type="button" title="Export mix session as JSON file" disabled>
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M12 18v-6"/><polyline points="9 15 12 12 15 15"/></svg>
+                  Export
+                </button>
+                <button id="session-import" type="button" title="Import mix session from JSON file">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M12 12v6"/><polyline points="9 15 12 18 15 15"/></svg>
+                  Import
+                </button>
+                <input id="session-import-input" type="file" accept=".json" style="display:none" aria-hidden="true" tabindex="-1" />
+                <span id="session-status" class="session-status" aria-live="polite"></span>
+              </div>
             </div>
             <div class="wave-scroll" id="wave-scroll">
               <div class="wave-canvas" id="wave-canvas">

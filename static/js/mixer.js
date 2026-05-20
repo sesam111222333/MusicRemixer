@@ -3,7 +3,8 @@ import {
 } from "./constants.js";
 import {
   mixerState, mixerEl, stemListEl, currentJobId, multitrack, trackIndex,
-  masterVolume,
+  masterVolume, loopEnabled, loopStart, loopEnd, waveZoom,
+  setLoopEnabled, setLoopStart, setLoopEnd, setWaveZoom,
 } from "./state.js";
 
 function defaultMixerEntry() {
@@ -125,7 +126,80 @@ export function refreshMixerVisuals() {
   }
 }
 
+// ─── Session export / import ───
+
+export function exportSession() {
+  if (!currentJobId) return;
+  const stems = {};
+  for (const name of TRACK_NAMES) {
+    if (mixerState[name]) stems[name] = { ...mixerState[name] };
+  }
+  const data = {
+    version: 1,
+    job_id: currentJobId,
+    stems,
+    loop: { enabled: loopEnabled, start: loopStart, end: loopEnd },
+    zoom: waveZoom,
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `mix-${currentJobId.slice(0, 8)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+export async function importSession(file) {
+  let data;
+  try {
+    data = JSON.parse(await file.text());
+  } catch {
+    throw new Error("Invalid file — could not parse JSON");
+  }
+  if (data.version !== 1 || !data.job_id || typeof data.stems !== "object") {
+    throw new Error("Unrecognised session format");
+  }
+
+  // Verify the job still exists on the server.
+  const res = await fetch(`/api/jobs/${data.job_id}`);
+  if (!res.ok) {
+    throw new Error("Job not found on server — it may have expired");
+  }
+
+  // Always persist to localStorage so the mix applies when the job next loads.
+  try {
+    localStorage.setItem(`stemdeck:mix:${data.job_id}`, JSON.stringify(data.stems));
+  } catch { /* ignore quota errors */ }
+
+  // If this job is currently open, apply state immediately.
+  if (currentJobId === data.job_id) {
+    for (const name of TRACK_NAMES) {
+      if (!mixerState[name]) mixerState[name] = defaultMixerEntry();
+      Object.assign(mixerState[name], defaultMixerEntry(), data.stems[name] || {});
+    }
+    if (data.loop && typeof data.loop.enabled === "boolean") {
+      setLoopEnabled(data.loop.enabled);
+      if (typeof data.loop.start === "number") setLoopStart(data.loop.start);
+      if (typeof data.loop.end === "number") setLoopEnd(data.loop.end);
+    }
+    if (typeof data.zoom === "number") {
+      setWaveZoom(Math.max(1, Math.min(32, data.zoom)));
+    }
+    refreshMixerVisuals();
+    applyMix();
+    document.dispatchEvent(new CustomEvent("stemdeck:session-imported"));
+    return { applied: true };
+  }
+
+  return { applied: false };
+}
+
 export function setLaneControlsEnabled(enabled) {
+  const exportBtn = document.getElementById("session-export");
+  if (exportBtn) exportBtn.disabled = !enabled;
   for (const b of mixerEl.querySelectorAll(".ms-btn")) b.disabled = !enabled;
   for (const b of mixerEl.querySelectorAll(".lane-icon-toggle")) b.disabled = !enabled;
   for (const a of mixerEl.querySelectorAll(".lane-dl")) {
@@ -514,10 +588,51 @@ export function clearAllSolos() {
   saveMix();
 }
 
+let _sessionStatusTimer = null;
+
+function showSessionStatus(msg, isError = false) {
+  const el = document.getElementById("session-status");
+  if (!el) return;
+  el.textContent = msg;
+  el.className = `session-status ${isError ? "error" : "ok"}`;
+  clearTimeout(_sessionStatusTimer);
+  _sessionStatusTimer = setTimeout(() => {
+    el.textContent = "";
+    el.className = "session-status";
+  }, 3500);
+}
+
 export function wireMixerToolbar() {
   document.getElementById("mixer-reset")?.addEventListener("click", resetMixer);
   document.getElementById("mixer-mute-all")?.addEventListener("click", muteAll);
   document.getElementById("mixer-clear-solo")?.addEventListener("click", clearAllSolos);
+
+  const exportBtn = document.getElementById("session-export");
+  const importBtn = document.getElementById("session-import");
+  const importInput = document.getElementById("session-import-input");
+
+  exportBtn?.addEventListener("click", () => {
+    exportSession();
+    showSessionStatus("Session exported");
+  });
+
+  importBtn?.addEventListener("click", () => importInput?.click());
+
+  importInput?.addEventListener("change", async () => {
+    const file = importInput.files?.[0];
+    if (!file) return;
+    importInput.value = "";
+    try {
+      const result = await importSession(file);
+      showSessionStatus(
+        result.applied
+          ? "Session restored"
+          : "Session saved — load the track to apply",
+      );
+    } catch (err) {
+      showSessionStatus(err.message, true);
+    }
+  });
 }
 
 export function wireStemListControls() {
