@@ -7,7 +7,7 @@ import {
 } from "./state.js";
 
 function defaultMixerEntry() {
-  return { volume: 1, muted: false, soloed: false };
+  return { volume: 1, muted: false, soloed: false, pitch: 0 };
 }
 
 export function ensureMixerStateDefaults() {
@@ -94,6 +94,8 @@ export function refreshMixerVisuals() {
       row.classList.toggle("muted", state.muted);
       const knob = row.querySelector(".lane-knob");
       if (knob) updateLaneKnobVisual(knob, state.volume);
+      const pitchWrap = row.querySelector(".pitch-control");
+      if (pitchWrap) refreshPitchControl(pitchWrap, state.pitch ?? 0);
     }
     // Stems-list panel row (mirrors the mixer column buttons)
     if (stemListEl) {
@@ -140,6 +142,9 @@ export function setLaneControlsEnabled(enabled) {
     k.classList.toggle("disabled", !enabled);
     k.setAttribute("aria-disabled", String(!enabled));
     k.setAttribute("tabindex", enabled ? "0" : "-1");
+  }
+  for (const s of mixerEl.querySelectorAll(".pitch-slider")) {
+    s.disabled = !enabled;
   }
 }
 
@@ -224,6 +229,62 @@ function downloadIcon() {
     '<path d="m7.5 9.5 4.5 4.5 4.5-4.5"></path>' +
     '<rect x="5" y="17" width="14" height="4" rx="1.5"></rect>';
   return svg;
+}
+
+function pitchLabel(semitones) {
+  if (semitones === 0) return "0 st";
+  return (semitones > 0 ? "+" : "") + semitones + " st";
+}
+
+function refreshPitchControl(wrapEl, semitones) {
+  const slider = wrapEl.querySelector(".pitch-slider");
+  const label = wrapEl.querySelector(".pitch-value");
+  if (slider) slider.value = String(semitones);
+  if (label) label.textContent = pitchLabel(semitones);
+}
+
+export function setPitch(name, semitones) {
+  const state = mixerState[name];
+  if (!state) return;
+  state.pitch = Math.round(Math.max(-12, Math.min(12, semitones)));
+  const wrap = mixerEl.querySelector(`.pitch-control[data-stem="${name}"]`);
+  if (wrap) refreshPitchControl(wrap, state.pitch);
+  saveMix();
+}
+
+function makePitchControl(stemName, color) {
+  const wrap = document.createElement("div");
+  wrap.className = "pitch-control";
+  wrap.dataset.stem = stemName;
+
+  const label = document.createElement("span");
+  label.className = "pitch-value";
+  label.textContent = "0 st";
+  label.style.color = color;
+
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.className = "pitch-slider";
+  slider.min = "-12";
+  slider.max = "12";
+  slider.step = "1";
+  slider.value = "0";
+  slider.title = "Pitch offset ±12 semitones · double-click to reset";
+
+  slider.addEventListener("input", () => {
+    const v = parseInt(slider.value, 10);
+    label.textContent = pitchLabel(v);
+    const state = mixerState[stemName];
+    if (state) state.pitch = v;
+    saveMix();
+  });
+
+  slider.addEventListener("dblclick", () => {
+    setPitch(stemName, 0);
+  });
+
+  wrap.append(label, slider);
+  return wrap;
 }
 
 function makeVolumeKnob(stemName, color) {
@@ -338,6 +399,7 @@ export function renderMixerRow(stem) {
   const controls = content.querySelector(".lane-controls");
   controls.appendChild(makeVolumeKnob(stem.name, color));
   controls.appendChild(makeMiniWaveSvg(stem.name, color));
+  controls.appendChild(makePitchControl(stem.name, color));
 
   const dl = document.createElement("a");
   dl.className = "lane-dl";
@@ -421,6 +483,7 @@ export function resetMixer() {
     s.volume = 1;
     s.muted = false;
     s.soloed = false;
+    s.pitch = 0;
   }
   refreshMixerVisuals();
   applyMix();

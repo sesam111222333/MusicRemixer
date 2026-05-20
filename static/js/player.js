@@ -839,7 +839,8 @@ export function wireUpAudio(jobId, stems, duration, thumbnail) {
       if (!active.length) return;
       const stemParam = active.join(",");
       const volParam = active.map((n) => (mixerState[n]?.volume ?? 1).toFixed(4)).join(",");
-      const url = `/api/jobs/${jobId}/remix.wav?stems=${encodeURIComponent(stemParam)}&volumes=${encodeURIComponent(volParam)}`;
+      const pitchParam = active.map((n) => (mixerState[n]?.pitch ?? 0)).join(",");
+      const url = `/api/jobs/${jobId}/remix.wav?stems=${encodeURIComponent(stemParam)}&volumes=${encodeURIComponent(volParam)}&pitches=${encodeURIComponent(pitchParam)}`;
       const a = document.createElement("a");
       a.href = url;
       a.download = "";

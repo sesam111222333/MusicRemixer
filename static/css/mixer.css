@@ -398,6 +398,80 @@
   transition: bottom 80ms linear;
 }
 
+/* ── Pitch control (import/preview mode: hidden; studio mode: shown) ── */
+
+.pitch-control {
+  display: none;
+}
+
+.app:not(.is-import) .pitch-control {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 46px; /* above lane-dl (34px height + 6px bottom + 6px gap) */
+  padding: 3px 4px 2px;
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: 5px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.pitch-value {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  line-height: 1;
+  opacity: 0.85;
+  user-select: none;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.pitch-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(148, 163, 184, 0.25);
+  outline: none;
+  cursor: pointer;
+  accent-color: var(--stem-color, #a0a0a0);
+}
+
+.pitch-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--stem-color, #a0a0a0);
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+  cursor: grab;
+}
+
+.pitch-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: none;
+  background: var(--stem-color, #a0a0a0);
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+  cursor: grab;
+}
+
+.pitch-slider:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Push the fader up so it doesn't overlap the pitch control */
+.app:not(.is-import) .lane-controls {
+  padding-bottom: 84px; /* 38px dl + 30px pitch-control + 16px gap */
+}
+
 .app:not(.is-import) .master-strip {
   height: 100%;
   min-height: 0;
