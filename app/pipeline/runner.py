@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from app.core.models import Job, JobCancelled
+from app.core.persistence import save_job
 from app.pipeline.analyze import analyze
 from app.pipeline.collect import (
     cleanup_source,
@@ -117,6 +118,8 @@ async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
         return
     _set(job, status="done", progress=1.0, stage="Done")
     _record_stats(job, "done")
+    save_job(job)
+    save_job(job)
 
 
 def _validate_audio(source: Path) -> float:
@@ -193,3 +196,4 @@ async def run_pipeline_from_file(job: Job, source: Path, jobs_dir: Path) -> None
         return
     _set(job, status="done", progress=1.0, stage="Done")
     _record_stats(job, "done")
+    save_job(job)

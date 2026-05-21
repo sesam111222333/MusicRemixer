@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.router import router
 from app.core.config import DEMUCS_DEVICE, DEMUCS_MODEL, JOBS_DIR, STATIC_DIR
+from app.core.persistence import load_all_jobs
 
 # Show our INFO-level logs through uvicorn's root handler. Without this,
 # Python's default root level (WARNING) silently drops every
@@ -46,3 +47,4 @@ app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 # Ensure the jobs directory exists at startup (module-level side effect
 # moved from the old monolithic main.py; this is the canonical entrypoint).
 JOBS_DIR.mkdir(exist_ok=True)
+load_all_jobs()

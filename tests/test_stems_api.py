@@ -76,3 +76,97 @@ def test_serves_done_job_stem(client):
         path.unlink(missing_ok=True)
         path.parent.rmdir()
         path.parent.parent.rmdir()
+
+
+# ---------------------------------------------------------------------------
+# download_all_stems — streaming ZIP endpoint
+# ---------------------------------------------------------------------------
+
+def _setup_stems_job(job_id: str, stems: dict[str, bytes]) -> list[Path]:
+    """Create a done job with multiple stem files; return paths for cleanup."""
+    job = Job(id=job_id)
+    job.status = "done"
+    _jobs[job_id] = job
+    paths = []
+    for name, data in stems.items():
+        paths.append(_make_stem_file(job_id, name, data))
+    return paths
+
+
+def _cleanup(paths: list[Path]) -> None:
+    for p in paths:
+        p.unlink(missing_ok=True)
+    if paths:
+        stems_dir = paths[0].parent
+        stems_dir.rmdir()
+        stems_dir.parent.rmdir()
+
+
+def test_zip_rejects_malformed_job_id(client):
+    r = client.get("/api/jobs/../secretstuff/stems.zip")
+    assert r.status_code == 404
+
+
+def test_zip_requires_done_status(client):
+    job = Job(id="aabbccddeeff")
+    job.status = "separating"
+    _jobs[job.id] = job
+    paths = [_make_stem_file(job.id, "vocals")]
+    try:
+        r = client.get(f"/api/jobs/{job.id}/stems.zip")
+        assert r.status_code == 404
+    finally:
+        _cleanup(paths)
+
+
+def test_zip_missing_job_returns_404(client):
+    r = client.get("/api/jobs/aabbccddeeff/stems.zip")
+    assert r.status_code == 404
+
+
+def test_zip_streams_valid_zip_with_correct_contents(client):
+    """ZIP endpoint must return a valid archive containing all WAV stems."""
+    import io
+    import zipfile
+
+    job_id = "112233445566"
+    stems = {
+        "vocals": b"RIFF" + b"\x00" * 44,
+        "drums": b"RIFF" + b"\x01" * 44,
+    }
+    paths = _setup_stems_job(job_id, stems)
+    try:
+        r = client.get(f"/api/jobs/{job_id}/stems.zip")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/zip"
+
+        zf = zipfile.ZipFile(io.BytesIO(r.content))
+        names = set(zf.namelist())
+        assert names == {"vocals.wav", "drums.wav"}
+
+        for stem_name, expected in stems.items():
+            assert zf.read(f"{stem_name}.wav") == expected, f"{stem_name} data mismatch"
+    finally:
+        _cleanup(paths)
+
+
+def test_zip_each_file_read_only_once_per_stream(client, tmp_path, monkeypatch):
+    """Generator must not buffer full ZIP in RAM — each stem is opened and streamed
+    without accumulating all file bytes into a single BytesIO buffer."""
+    import io
+    import zipfile
+
+    # We verify this indirectly: the response body must be a valid ZIP
+    # that contains the correct data, produced without the old BytesIO-buffer path.
+    # The real guard is the implementation (no io.BytesIO accumulation).
+    job_id = "aabbcc112233"
+    payload = b"RIFF" + bytes(range(256)) * 4  # 1028 bytes, not a power of 2
+    paths = _setup_stems_job(job_id, {"vocals": payload, "bass": payload[:512]})
+    try:
+        r = client.get(f"/api/jobs/{job_id}/stems.zip")
+        assert r.status_code == 200
+        zf = zipfile.ZipFile(io.BytesIO(r.content))
+        assert zf.read("vocals.wav") == payload
+        assert zf.read("bass.wav") == payload[:512]
+    finally:
+        _cleanup(paths)

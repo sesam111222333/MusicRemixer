@@ -6,7 +6,7 @@ import subprocess
 import zipfile
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from app.core.config import JOB_ID_RE, JOBS_DIR, STEM_NAMES
 from app.core.registry import get as registry_get
@@ -20,8 +20,7 @@ router = APIRouter(tags=["stems"])
 _ALLOWED_NAMES = frozenset(STEM_NAMES) | {"original", "mix"}
 
 
-@router.get("/jobs/{job_id}/stems/{name}.wav")
-def get_stem(job_id: str, name: str) -> FileResponse:
+def _resolve_stem_path(job_id: str, name: str):
     if not JOB_ID_RE.match(job_id):
         raise HTTPException(status_code=404, detail="job not found")
     if name not in _ALLOWED_NAMES:
@@ -29,12 +28,34 @@ def get_stem(job_id: str, name: str) -> FileResponse:
     job = registry_get(job_id)
     if job is None or job.status != "done":
         raise HTTPException(status_code=404, detail="job not ready")
-    # Resolve and confirm the path stays under JOBS_DIR -- belt and suspenders
-    # on top of the regex above. Mirrors the check in app/pipeline/analyze.py.
     path = (JOBS_DIR / job_id / "stems" / f"{name}.wav").resolve()
     if not path.is_file() or not path.is_relative_to(JOBS_DIR.resolve()):
         raise HTTPException(status_code=404, detail="stem not found")
-    return FileResponse(path, media_type="audio/wav", filename=f"{name}.wav")
+    return path
+
+
+@router.head("/jobs/{job_id}/stems/{name}.wav")
+def head_stem(job_id: str, name: str) -> Response:
+    path = _resolve_stem_path(job_id, name)
+    return Response(
+        status_code=200,
+        headers={
+            "content-type": "audio/wav",
+            "content-length": str(path.stat().st_size),
+            "accept-ranges": "bytes",
+            "content-disposition": f'inline; filename="{name}.wav"',
+        },
+    )
+
+
+@router.get("/jobs/{job_id}/stems/{name}.wav")
+def get_stem(job_id: str, name: str) -> FileResponse:
+    path = _resolve_stem_path(job_id, name)
+    return FileResponse(
+        path,
+        media_type="audio/wav",
+        headers={"Content-Disposition": f'inline; filename="{name}.wav"'},
+    )
 
 
 @router.get("/jobs/{job_id}/stems.zip")
