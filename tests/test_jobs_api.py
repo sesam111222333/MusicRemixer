@@ -29,6 +29,21 @@ def client():
             yield c
 
 
+@pytest.fixture
+def client_upload(tmp_path):
+    async def _noop_pipeline(job, source_path, jobs_dir):
+        return None
+
+    with (
+        patch("app.api.jobs.run_pipeline_from_file", _noop_pipeline),
+        patch("app.api.jobs.JOBS_DIR", tmp_path),
+    ):
+        from app.main import app
+
+        with TestClient(app) as c:
+            yield c
+
+
 def test_post_rejects_invalid_url(client):
     r = client.post("/api/jobs", json={"url": "https://example.com/foo"})
     assert r.status_code == 422
@@ -82,3 +97,15 @@ def test_cancel_after_done_is_idempotent(client):
     r = client.post(f"/api/jobs/{job_id}/cancel")
     assert r.status_code == 200
     assert _jobs[job_id].cancel_requested is False  # not flipped on terminal jobs
+
+
+def test_upload_rejects_oversized_file(client_upload):
+    """A payload exceeding MAX_UPLOAD_BYTES must return 413 without writing the
+    entire body to disk."""
+    oversized = b"\x00" * 200  # 200 bytes; limit will be patched to 100
+    with patch("app.api.jobs.MAX_UPLOAD_BYTES", 100):
+        r = client_upload.post(
+            "/api/jobs/upload",
+            files={"file": ("test.mp3", oversized, "audio/mpeg")},
+        )
+    assert r.status_code == 413

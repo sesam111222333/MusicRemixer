@@ -50,6 +50,7 @@ JOBS_DIR = _env_path("STEMDECK_JOBS_DIR", ROOT / "jobs")
 DEMUCS_MODEL = os.environ.get("STEMDECK_DEMUCS_MODEL", "htdemucs_6s").strip() or "htdemucs_6s"
 DEMUCS_DEVICE = _detect_device()
 MAX_DURATION_SEC = _env_int("STEMDECK_MAX_DURATION_SEC", 1200)  # 20 min default
+MAX_UPLOAD_BYTES = _env_int("STEMDECK_MAX_UPLOAD_BYTES", 500 * 1024 * 1024)  # 500 MB default
 JOB_TTL_SECONDS = _env_int("STEMDECK_JOB_TTL_SECONDS", 24 * 3600)  # 24 h default
 MAX_PENDING_JOBS = _env_int("STEMDECK_MAX_PENDING_JOBS", 3)
 

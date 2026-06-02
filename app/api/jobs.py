@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.core.config import DEFAULT_BACKEND, JOBS_DIR, STEMS_4, STEMS_6
+from app.core.config import DEFAULT_BACKEND, JOBS_DIR, MAX_UPLOAD_BYTES, STEMS_4, STEMS_6
 from app.core.models import Job
 from app.core.registry import get as registry_get
 from app.core.registry import get_proc as registry_get_proc
@@ -85,9 +85,20 @@ async def create_job_from_upload(
     job_dir.mkdir(parents=True, exist_ok=True)
     source_path = job_dir / f"source{ext}"
 
+    bytes_written = 0
+    exceeded = False
     with source_path.open("wb") as out:
         while chunk := await file.read(8 * 1024 * 1024):
+            bytes_written += len(chunk)
+            if bytes_written > MAX_UPLOAD_BYTES:
+                exceeded = True
+                break
             out.write(chunk)
+
+    if exceeded:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        registry_remove(job.id)
+        raise HTTPException(status_code=413, detail="Upload exceeds maximum allowed size")
 
     asyncio.create_task(run_pipeline_from_file(job, source_path, JOBS_DIR))
     return {"job_id": job.id}
