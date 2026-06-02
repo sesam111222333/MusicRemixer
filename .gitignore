@@ -53,3 +53,6 @@ Thumbs.db
 .python-version
 .claude/
 .playwright-mcp/
+
+# Runtime data (job stats etc.) — never commit
+app/data/
