@@ -170,3 +170,59 @@ def test_zip_each_file_read_only_once_per_stream(client, tmp_path, monkeypatch):
         assert zf.read("bass.wav") == payload[:512]
     finally:
         _cleanup(paths)
+
+
+# ---------------------------------------------------------------------------
+# Content-Disposition filename sanitization — double-quote in title
+# ---------------------------------------------------------------------------
+
+
+def test_zip_content_disposition_sanitizes_double_quotes(client):
+    """filename in Content-Disposition must not contain bare double-quote chars."""
+    import subprocess
+
+    job_id = "aabbccddeea0"
+    job = Job(id=job_id, title='"Hello" - Adele')
+    job.status = "done"
+    _jobs[job_id] = job
+    paths = [_make_stem_file(job_id, "vocals")]
+    try:
+        r = client.get(f"/api/jobs/{job_id}/stems.zip")
+        assert r.status_code == 200
+        cd = r.headers["content-disposition"]
+        assert 'filename="' in cd
+        # Everything between the outer double-quotes must contain no bare "
+        inner = cd.split('filename="', 1)[1][:-1]
+        assert '"' not in inner, f"Bare double-quote in Content-Disposition: {cd!r}"
+    finally:
+        _cleanup(paths)
+
+
+def test_remix_content_disposition_sanitizes_double_quotes(client, monkeypatch):
+    """remix filename in Content-Disposition must not contain bare double-quote chars."""
+    import subprocess
+
+    job_id = "aabbccddeeb1"
+    job = Job(id=job_id, title='"Hello" - Adele')
+    job.status = "done"
+    _jobs[job_id] = job
+    paths = [_make_stem_file(job_id, "vocals", b"RIFF\x00\x00\x00\x00WAVE")]
+
+    fake_wav = b"RIFF\x00\x00\x00\x00WAVE"
+
+    class _FakeResult:
+        returncode = 0
+        stdout = fake_wav
+        stderr = b""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _FakeResult())
+
+    try:
+        r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
+        assert r.status_code == 200
+        cd = r.headers["content-disposition"]
+        assert 'filename="' in cd
+        inner = cd.split('filename="', 1)[1][:-1]
+        assert '"' not in inner, f"Bare double-quote in Content-Disposition: {cd!r}"
+    finally:
+        _cleanup(paths)

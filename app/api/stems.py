@@ -81,7 +81,7 @@ def download_all_stems(job_id: str) -> StreamingResponse:
         while chunk := buf.read(65536):
             yield chunk
 
-    safe = (job.title or job_id).replace("/", "_").replace("\\", "_")[:80]
+    safe = (job.title or job_id).replace("/", "_").replace("\\", "_").replace('"', "")[:80]
     filename = f"{safe}_stems.zip"
     return StreamingResponse(
         generate(),
@@ -193,7 +193,7 @@ def download_remix(
             yield wav_bytes[offset : offset + 65536]
             offset += 65536
 
-    safe = (job.title or job_id).replace("/", "_").replace("\\", "_")[:80]
+    safe = (job.title or job_id).replace("/", "_").replace("\\", "_").replace('"', "")[:80]
     has_pitch = any(p != 0 for _, _, p in triples)
     suffix = "_pitched" if has_pitch else ""
     return StreamingResponse(
