@@ -226,3 +226,54 @@ def test_remix_content_disposition_sanitizes_double_quotes(client, monkeypatch):
         assert '"' not in inner, f"Bare double-quote in Content-Disposition: {cd!r}"
     finally:
         _cleanup(paths)
+
+
+# ---------------------------------------------------------------------------
+# Content-Disposition filename sanitization — non-latin-1 characters in title
+# ---------------------------------------------------------------------------
+
+
+def test_zip_content_disposition_handles_non_latin1_title(client):
+    """download_all_stems must not crash (HTTP 500) when title contains non-latin-1 chars."""
+    job_id = "aabbccddeec2"
+    job = Job(id=job_id, title="東京の音楽🎵 - Summer Mix")
+    job.status = "done"
+    _jobs[job_id] = job
+    paths = [_make_stem_file(job_id, "vocals")]
+    try:
+        r = client.get(f"/api/jobs/{job_id}/stems.zip")
+        assert r.status_code == 200, f"Expected 200, got {r.status_code} (non-latin-1 title caused crash)"
+        assert "content-disposition" in r.headers
+        # Header value must be encodable as latin-1 (no UnicodeEncodeError)
+        r.headers["content-disposition"].encode("latin-1")
+    finally:
+        _cleanup(paths)
+
+
+def test_remix_content_disposition_handles_non_latin1_title(client, monkeypatch):
+    """download_remix must not crash (HTTP 500) when title contains non-latin-1 chars."""
+    import subprocess
+
+    job_id = "aabbccddee33"
+    job = Job(id=job_id, title="東京の音楽🎵 - Summer Mix")
+    job.status = "done"
+    _jobs[job_id] = job
+    paths = [_make_stem_file(job_id, "vocals", b"RIFF\x00\x00\x00\x00WAVE")]
+
+    fake_wav = b"RIFF\x00\x00\x00\x00WAVE"
+
+    class _FakeResult:
+        returncode = 0
+        stdout = fake_wav
+        stderr = b""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _FakeResult())
+
+    try:
+        r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
+        assert r.status_code == 200, f"Expected 200, got {r.status_code} (non-latin-1 title caused crash)"
+        assert "content-disposition" in r.headers
+        # Header value must be encodable as latin-1 (no UnicodeEncodeError)
+        r.headers["content-disposition"].encode("latin-1")
+    finally:
+        _cleanup(paths)

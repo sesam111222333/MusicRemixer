@@ -82,6 +82,7 @@ def download_all_stems(job_id: str) -> StreamingResponse:
             yield chunk
 
     safe = (job.title or job_id).replace("/", "_").replace("\\", "_").replace('"', "")[:80]
+    safe = safe.encode("latin-1", errors="replace").decode("latin-1").replace("?", "_")
     filename = f"{safe}_stems.zip"
     return StreamingResponse(
         generate(),
@@ -194,6 +195,7 @@ def download_remix(
             offset += 65536
 
     safe = (job.title or job_id).replace("/", "_").replace("\\", "_").replace('"', "")[:80]
+    safe = safe.encode("latin-1", errors="replace").decode("latin-1").replace("?", "_")
     has_pitch = any(p != 0 for _, _, p in triples)
     suffix = "_pitched" if has_pitch else ""
     return StreamingResponse(
