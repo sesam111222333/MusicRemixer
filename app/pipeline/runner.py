@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from app.core.config import MAX_DURATION_SEC
 from app.core.models import Job, JobCancelled
 from app.core.persistence import save_job
 from app.pipeline.analyze import analyze
@@ -143,9 +144,12 @@ def _validate_audio(source: Path) -> float:
             raise ValueError("Uploaded file contains no audio stream")
         fmt = info.get("format", {})
         dur = float(fmt.get("duration") or info["streams"][0].get("duration") or 0)
-        return dur
     except (KeyError, TypeError, ValueError):
         raise ValueError("Uploaded file is not a valid audio file")
+    if dur > MAX_DURATION_SEC:
+        mins = MAX_DURATION_SEC // 60
+        raise ValueError(f"Duration {int(dur // 60)} min exceeds limit of {mins} min")
+    return dur
 
 
 def _run_blocking_from_file(job: Job, source: Path, job_dir: Path) -> None:
