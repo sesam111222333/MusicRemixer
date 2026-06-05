@@ -17,7 +17,9 @@ def _load() -> list[dict]:
 
 def _save(entries: list[dict]) -> None:
     _STATS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _STATS_FILE.write_text(json.dumps(entries))
+    tmp = _STATS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(entries))
+    tmp.replace(_STATS_FILE)
 
 
 def record_completion(job_id: str, title: str | None, status: str) -> None:
