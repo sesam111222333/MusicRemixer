@@ -94,6 +94,18 @@ def download_all_stems(job_id: str) -> StreamingResponse:
 _STEMS_SAMPLE_RATE = 44100  # Demucs/BSRoFormer output sample rate
 
 
+def _parse_pitch(s: str) -> int:
+    """Parse a semitone offset from a query-param string.
+
+    Falls back to 0 for any non-numeric input or for float infinity/NaN, which
+    would make round() raise OverflowError — not caught by except ValueError.
+    """
+    try:
+        return max(-12, min(12, round(float(s))))
+    except (ValueError, OverflowError):
+        return 0
+
+
 @router.get("/jobs/{job_id}/remix.wav")
 def download_remix(
     job_id: str,
@@ -137,10 +149,7 @@ def download_remix(
             vol = max(0.0, min(4.0, float(vol_str)))
         except ValueError:
             vol = 1.0
-        try:
-            pitch = max(-12, min(12, round(float(pitch_str))))
-        except ValueError:
-            pitch = 0
+        pitch = _parse_pitch(pitch_str)
         triples.append((name, vol, pitch))
 
     if not triples:
