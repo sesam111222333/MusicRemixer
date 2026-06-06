@@ -10,6 +10,8 @@ from app.core.config import MAX_DURATION_SEC
 from app.core.models import Job, JobCancelled
 
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+# Longest-first so "RDAMVM" is matched before the plain "RD" prefix.
+_RD_PREFIXES = ("RDAMVM", "RDCLAK", "RDQM", "RDEM", "RD")
 _ALLOWED_HOSTS = frozenset(
     (
         "youtube.com",
@@ -80,12 +82,13 @@ def normalize_youtube_url(url: str) -> str:
     if (vid := (qs.get("v") or [None])[0]) and _VIDEO_ID_RE.match(vid):
         return f"https://www.youtube.com/watch?v={vid}"
 
-    if (
-        (lst := (qs.get("list") or [None])[0])
-        and lst.startswith("RD")
-        and _VIDEO_ID_RE.match(lst[2:13])
-    ):
-        return f"https://www.youtube.com/watch?v={lst[2:13]}"
+    if (lst := (qs.get("list") or [None])[0]) and lst.startswith("RD"):
+        for prefix in _RD_PREFIXES:
+            if lst.startswith(prefix):
+                candidate = lst[len(prefix) : len(prefix) + 11]
+                if _VIDEO_ID_RE.match(candidate):
+                    return f"https://www.youtube.com/watch?v={candidate}"
+                break
 
     if host == "youtu.be":
         vid = parsed.path.lstrip("/")
