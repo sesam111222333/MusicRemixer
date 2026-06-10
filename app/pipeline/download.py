@@ -115,7 +115,11 @@ def download(job: Job, url: str, job_dir: Path) -> Path:
     # too long before wasting bandwidth and disk.
     with YoutubeDL({"quiet": True, "noplaylist": True}) as ydl:
         meta = ydl.extract_info(url, download=False) or {}
-    duration = meta.get("duration") or 0
+    if meta.get("is_live"):
+        raise RuntimeError("Live streams cannot be processed")
+    duration = meta.get("duration")
+    if duration is None:
+        raise RuntimeError("Video duration is unknown -- cannot verify duration limit")
     if duration > MAX_DURATION_SEC:
         mins = MAX_DURATION_SEC // 60
         raise RuntimeError(f"Video is {int(duration // 60)} min -- limit is {mins} min")
