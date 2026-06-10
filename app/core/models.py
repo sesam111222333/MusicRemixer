@@ -69,4 +69,5 @@ class Job:
             "selected_stems": self.selected_stems,
             "mix_url": self.mix_url,
             "error": self.error,
+            "created_at": self.created_at,
         }
