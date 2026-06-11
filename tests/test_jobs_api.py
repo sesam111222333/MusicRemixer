@@ -109,3 +109,32 @@ def test_upload_rejects_oversized_file(client_upload):
             files={"file": ("test.mp3", oversized, "audio/mpeg")},
         )
     assert r.status_code == 413
+
+
+def test_upload_client_disconnect_cleans_up(tmp_path):
+    """ClientDisconnect raised during file.read must remove the job from the
+    registry and delete the job_dir so no orphan accumulates."""
+    from starlette.datastructures import UploadFile
+    from starlette.requests import ClientDisconnect
+
+    async def _noop_pipeline(job, source_path, jobs_dir):
+        return None
+
+    async def _disconnect(*args, **kwargs):
+        raise ClientDisconnect()
+
+    with (
+        patch("app.api.jobs.run_pipeline_from_file", _noop_pipeline),
+        patch("app.api.jobs.JOBS_DIR", tmp_path),
+        patch.object(UploadFile, "read", _disconnect),
+    ):
+        from app.main import app
+
+        with TestClient(app, raise_server_exceptions=False) as c:
+            c.post(
+                "/api/jobs/upload",
+                files={"file": ("test.mp3", b"audio_data", "audio/mpeg")},
+            )
+
+    assert not _jobs, "job must be removed from registry on ClientDisconnect"
+    assert not any(tmp_path.iterdir()), "job_dir must be deleted on ClientDisconnect"

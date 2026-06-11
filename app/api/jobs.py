@@ -85,15 +85,20 @@ async def create_job_from_upload(
     job_dir.mkdir(parents=True, exist_ok=True)
     source_path = job_dir / f"source{ext}"
 
-    bytes_written = 0
-    exceeded = False
-    with source_path.open("wb") as out:
-        while chunk := await file.read(8 * 1024 * 1024):
-            bytes_written += len(chunk)
-            if bytes_written > MAX_UPLOAD_BYTES:
-                exceeded = True
-                break
-            out.write(chunk)
+    try:
+        bytes_written = 0
+        exceeded = False
+        with source_path.open("wb") as out:
+            while chunk := await file.read(8 * 1024 * 1024):
+                bytes_written += len(chunk)
+                if bytes_written > MAX_UPLOAD_BYTES:
+                    exceeded = True
+                    break
+                out.write(chunk)
+    except Exception:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        registry_remove(job.id)
+        raise
 
     if exceeded:
         shutil.rmtree(job_dir, ignore_errors=True)
