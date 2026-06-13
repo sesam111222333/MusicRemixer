@@ -122,7 +122,12 @@ def _detect_key(chroma_mean: list[float]) -> tuple[str, str, int]:
     # ties with the algorithm's profile-correlation approach, so they
     # tell us nothing about real ambiguity). Normalize so a healthy 0.15
     # gap = 100% confident; tiny gap = 0%.
-    runner_up = next(c for c in raw if c[2] != winner[2])
+    winner_idx = winner[3]
+    if winner[2].endswith("maj"):
+        relative_label = f"{_PITCHES[(winner_idx + 9) % 12]} min"
+    else:
+        relative_label = f"{_PITCHES[(winner_idx + 3) % 12]} maj"
+    runner_up = next(c for c in raw if c[2] != winner[2] and c[2] != relative_label)
     confidence_score = winner[0] - runner_up[0]
     confidence_pct = max(0, min(100, round(confidence_score / 0.15 * 100)))
 
