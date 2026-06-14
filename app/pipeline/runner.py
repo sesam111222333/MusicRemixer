@@ -115,6 +115,8 @@ async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
             return
         logger.exception("pipeline failed for job %s", job.id)
         _set(job, status="error", stage=f"Error: {e}", error=str(e))
+        if job_dir.is_dir():
+            shutil.rmtree(job_dir, ignore_errors=True)
         _record_stats(job, "error")
         return
     _set(job, status="done", progress=1.0, stage="Done")
@@ -196,6 +198,8 @@ async def run_pipeline_from_file(job: Job, source: Path, jobs_dir: Path) -> None
             return
         logger.exception("pipeline failed for job %s", job.id)
         _set(job, status="error", stage=f"Error: {e}", error=str(e))
+        if job_dir.is_dir():
+            shutil.rmtree(job_dir, ignore_errors=True)
         _record_stats(job, "error")
         return
     _set(job, status="done", progress=1.0, stage="Done")

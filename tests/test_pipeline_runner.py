@@ -9,7 +9,7 @@ import pytest
 
 from app.core.config import MAX_DURATION_SEC
 from app.core.models import Job, JobCancelled
-from app.pipeline.runner import _validate_audio, run_pipeline
+from app.pipeline.runner import _validate_audio, run_pipeline, run_pipeline_from_file
 
 
 @pytest.mark.asyncio
@@ -127,3 +127,46 @@ def test_validate_audio_accepts_duration_within_limit(monkeypatch, tmp_path):
 
     dur = _validate_audio(audio_file)
     assert dur == float(ok_duration)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_cleans_job_dir_on_error(tmp_path: Path):
+    """On a non-cancel failure, run_pipeline must delete job_dir so that
+    100-300 MB source files and temp separation dirs don't linger until TTL."""
+    job = Job(id="errorcleanup1")
+
+    def boom(*args, **kwargs):
+        # Simulate demucs OOM: create some temp files first, then crash.
+        job_dir = tmp_path / job.id
+        (job_dir / "_demucs_tmp").mkdir(parents=True, exist_ok=True)
+        (job_dir / "_demucs_tmp" / "partial.wav").write_bytes(b"x" * 1024)
+        raise RuntimeError("CUDA out of memory")
+
+    with patch("app.pipeline.runner._run_blocking", side_effect=boom):
+        await run_pipeline(job, "https://www.youtube.com/watch?v=dQw4w9WgXcQ", tmp_path)
+
+    assert job.status == "error"
+    # job_dir and all its contents must be gone.
+    assert not (tmp_path / job.id).exists(), "job_dir was not cleaned up on error"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_from_file_cleans_job_dir_on_error(tmp_path: Path):
+    """On a non-cancel failure, run_pipeline_from_file must delete job_dir."""
+    job = Job(id="errorcleanup2")
+    source = tmp_path / "source.wav"
+    source.write_bytes(b"fake audio")
+
+    def boom(*args, **kwargs):
+        # Simulate a crash after separation dirs are created.
+        job_dir = tmp_path / job.id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "_bsr_tmp").mkdir()
+        (job_dir / "_bsr_tmp" / "partial.wav").write_bytes(b"x" * 1024)
+        raise RuntimeError("audio-separator OOM")
+
+    with patch("app.pipeline.runner._run_blocking_from_file", side_effect=boom):
+        await run_pipeline_from_file(job, source, tmp_path)
+
+    assert job.status == "error"
+    assert not (tmp_path / job.id).exists(), "job_dir was not cleaned up on error"
