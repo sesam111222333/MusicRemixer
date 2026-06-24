@@ -9,8 +9,9 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.core.config import DEFAULT_BACKEND, JOBS_DIR, MAX_UPLOAD_BYTES, STEMS_4, STEMS_6
+from app.core.config import DEFAULT_BACKEND, JOBS_DIR, MAX_PENDING_JOBS, MAX_UPLOAD_BYTES, STEMS_4, STEMS_6
 from app.core.models import Job
+from app.core.registry import all_jobs as registry_all_jobs
 from app.core.registry import get as registry_get
 from app.core.registry import get_proc as registry_get_proc
 from app.core.registry import register as registry_register
@@ -27,6 +28,11 @@ _ALLOWED_EXTS = frozenset(
 
 
 _VALID_BACKENDS = frozenset(("demucs", "bsroformer"))
+_TERMINAL_STATUSES = frozenset(("done", "error", "cancelled"))
+
+
+def _pending_count() -> int:
+    return sum(1 for j in registry_all_jobs().values() if j.status not in _TERMINAL_STATUSES)
 
 
 def _resolve_backend(raw: str | None) -> str:
@@ -43,6 +49,8 @@ class JobRequest(BaseModel):
 
 @router.post("")
 async def create_job(payload: JobRequest) -> dict[str, str]:
+    if _pending_count() >= MAX_PENDING_JOBS:
+        raise HTTPException(status_code=429, detail="Too many pending jobs")
     try:
         url = validate_youtube_url(payload.url)
     except InvalidYouTubeURL as e:
@@ -63,6 +71,8 @@ async def create_job_from_upload(
     stems: str | None = Form(None),
     backend: str | None = Form(None),
 ) -> dict[str, str]:
+    if _pending_count() >= MAX_PENDING_JOBS:
+        raise HTTPException(status_code=429, detail="Too many pending jobs")
     resolved_backend = _resolve_backend(backend)
     stem_names = STEMS_4 if resolved_backend == "bsroformer" else STEMS_6
     selected = list(stem_names)

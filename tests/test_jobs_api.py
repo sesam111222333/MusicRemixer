@@ -111,6 +111,53 @@ def test_upload_rejects_oversized_file(client_upload):
     assert r.status_code == 413
 
 
+def test_url_job_limit_enforced(client):
+    """After MAX_PENDING_JOBS pending jobs, POST /api/jobs must return 429."""
+    with patch("app.api.jobs.MAX_PENDING_JOBS", 2, create=True):
+        url = "https://youtu.be/dQw4w9WgXcQ"
+        for _ in range(2):
+            r = client.post("/api/jobs", json={"url": url})
+            assert r.status_code == 200
+        r = client.post("/api/jobs", json={"url": url})
+        assert r.status_code == 429
+
+
+def test_upload_job_limit_enforced(client_upload):
+    """After MAX_PENDING_JOBS pending jobs, POST /api/jobs/upload must return 429
+    without writing any upload bytes to disk."""
+    audio = b"fake_audio_data"
+    with patch("app.api.jobs.MAX_PENDING_JOBS", 2, create=True):
+        for _ in range(2):
+            r = client_upload.post(
+                "/api/jobs/upload",
+                files={"file": ("test.mp3", audio, "audio/mpeg")},
+            )
+            assert r.status_code == 200
+        r = client_upload.post(
+            "/api/jobs/upload",
+            files={"file": ("test.mp3", audio, "audio/mpeg")},
+        )
+        assert r.status_code == 429
+
+
+def test_terminal_jobs_dont_count_toward_limit(client):
+    """Finished jobs (done/error/cancelled) must not occupy a pending slot."""
+    url = "https://youtu.be/dQw4w9WgXcQ"
+    with patch("app.api.jobs.MAX_PENDING_JOBS", 1, create=True):
+        r = client.post("/api/jobs", json={"url": url})
+        assert r.status_code == 200
+        job_id = r.json()["job_id"]
+
+        # Limit reached — second request while first is still pending → 429
+        r = client.post("/api/jobs", json={"url": url})
+        assert r.status_code == 429
+
+        # Slot freed once first job completes
+        _jobs[job_id].status = "done"
+        r = client.post("/api/jobs", json={"url": url})
+        assert r.status_code == 200
+
+
 def test_upload_client_disconnect_cleans_up(tmp_path):
     """ClientDisconnect raised during file.read must remove the job from the
     registry and delete the job_dir so no orphan accumulates."""
