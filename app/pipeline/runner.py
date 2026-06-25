@@ -145,9 +145,12 @@ def _validate_audio(source: Path) -> float:
         if not info.get("streams"):
             raise ValueError("Uploaded file contains no audio stream")
         fmt = info.get("format", {})
-        dur = float(fmt.get("duration") or info["streams"][0].get("duration") or 0)
+        dur_str = fmt.get("duration") or info["streams"][0].get("duration")
     except (KeyError, TypeError, ValueError):
         raise ValueError("Uploaded file is not a valid audio file")
+    if dur_str is None:
+        raise ValueError("Audio duration is unknown -- cannot verify duration limit")
+    dur = float(dur_str)
     if dur > MAX_DURATION_SEC:
         mins = MAX_DURATION_SEC // 60
         raise ValueError(f"Duration {int(dur // 60)} min exceeds limit of {mins} min")
