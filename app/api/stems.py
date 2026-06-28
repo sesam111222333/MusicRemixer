@@ -214,31 +214,27 @@ def download_remix(
     filter_complex = ";".join(filter_parts) + f";{mixed_inputs}amix=inputs={len(triples)}:normalize=0[out]"
     cmd += ["-filter_complex", filter_complex, "-map", "[out]", "-f", "wav", "-"]
 
-    # Run ffmpeg fully before committing to HTTP 200 so any failure becomes a
-    # proper 500 instead of a silently corrupt/truncated WAV.
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=300,
         )
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=500, detail="mix timed out")
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"ffmpeg unavailable: {exc}")
 
-    if result.returncode != 0:
-        stderr_text = result.stderr.decode(errors="replace").strip()
-        raise HTTPException(status_code=500, detail=f"mix failed: {stderr_text or 'ffmpeg exited with non-zero status'}")
-
-    wav_bytes = result.stdout
-
     def generate():
-        offset = 0
-        while offset < len(wav_bytes):
-            yield wav_bytes[offset : offset + 65536]
-            offset += 65536
+        assert proc.stdout is not None
+        try:
+            while True:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            if proc.stderr:
+                proc.stderr.read()
+            proc.wait()
 
     safe = (job.title or job_id).replace("/", "_").replace("\\", "_").replace('"', "")[:80]
     safe = safe.encode("latin-1", errors="replace").decode("latin-1").replace("?", "_")

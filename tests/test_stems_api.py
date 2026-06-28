@@ -229,6 +229,69 @@ def test_zip_content_disposition_sanitizes_double_quotes(client):
         _cleanup(paths)
 
 
+def _fake_popen(fake_wav: bytes):
+    """Return a fake subprocess.Popen instance that yields *fake_wav* from stdout."""
+    import io
+
+    class _FakePopen:
+        def __init__(self, *args, **kwargs):
+            self.stdout = io.BytesIO(fake_wav)
+            self.stderr = io.BytesIO(b"")
+            self.returncode = 0
+
+        def wait(self):
+            return 0
+
+    return _FakePopen
+
+
+# ---------------------------------------------------------------------------
+# download_remix — streaming (no subprocess.run buffering)
+# ---------------------------------------------------------------------------
+
+
+def test_download_remix_streams_via_popen_not_run(client, monkeypatch):
+    """download_remix must use subprocess.Popen (streaming) not subprocess.run.
+    subprocess.run(stdout=PIPE) buffers the full WAV in RAM before the first byte
+    is sent — ~200 MB for a 20-min stereo mix — causing OOM under concurrent load."""
+    import io
+    import subprocess
+
+    job_id = "aabbccddeef0"
+    job = Job(id=job_id, title="Streaming Test")
+    job.status = "done"
+    _jobs[job_id] = job
+
+    fake_wav = b"RIFF\x00\x00\x00\x00WAVE" + b"\x00" * 256
+    paths = [_make_stem_file(job_id, "vocals", b"RIFF\x00\x00\x00\x00WAVE")]
+
+    run_called: list[bool] = []
+
+    def fake_run(*args, **kwargs):
+        run_called.append(True)
+
+        class _R:
+            returncode = 0
+            stdout = fake_wav
+            stderr = b""
+
+        return _R()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen(fake_wav))
+
+    try:
+        r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
+        assert not run_called, (
+            "subprocess.run must not be called — it buffers the full WAV in RAM. "
+            "Use subprocess.Popen to stream output chunk by chunk."
+        )
+        assert r.status_code == 200
+        assert r.content == fake_wav
+    finally:
+        _cleanup(paths)
+
+
 def test_remix_content_disposition_sanitizes_double_quotes(client, monkeypatch):
     """remix filename in Content-Disposition must not contain bare double-quote chars."""
     import subprocess
@@ -241,12 +304,7 @@ def test_remix_content_disposition_sanitizes_double_quotes(client, monkeypatch):
 
     fake_wav = b"RIFF\x00\x00\x00\x00WAVE"
 
-    class _FakeResult:
-        returncode = 0
-        stdout = fake_wav
-        stderr = b""
-
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _FakeResult())
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen(fake_wav))
 
     try:
         r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
@@ -293,12 +351,7 @@ def test_remix_content_disposition_handles_non_latin1_title(client, monkeypatch)
 
     fake_wav = b"RIFF\x00\x00\x00\x00WAVE"
 
-    class _FakeResult:
-        returncode = 0
-        stdout = fake_wav
-        stderr = b""
-
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _FakeResult())
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen(fake_wav))
 
     try:
         r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
