@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import math
 import subprocess
 import zipfile
@@ -58,6 +57,41 @@ def get_stem(job_id: str, name: str) -> FileResponse:
     )
 
 
+class _StreamBuf:
+    """Non-seekable write buffer for streaming ZIP generation.
+
+    zipfile requires tell() even on non-seekable streams (for computing local
+    header offsets and the central directory offset), so we track total bytes
+    written without buffering them after each drain().
+    """
+
+    __slots__ = ("_data", "_total")
+
+    def __init__(self) -> None:
+        self._data: bytearray = bytearray()
+        self._total: int = 0
+
+    def write(self, b: bytes) -> int:
+        n = len(b)
+        self._data.extend(b)
+        self._total += n
+        return n
+
+    def flush(self) -> None:
+        pass
+
+    def seekable(self) -> bool:
+        return False
+
+    def tell(self) -> int:
+        return self._total
+
+    def drain(self) -> bytes:
+        chunk = bytes(self._data)
+        self._data.clear()
+        return chunk
+
+
 @router.get("/jobs/{job_id}/stems.zip")
 def download_all_stems(job_id: str) -> StreamingResponse:
     if not JOB_ID_RE.match(job_id):
@@ -73,12 +107,15 @@ def download_all_stems(job_id: str) -> StreamingResponse:
         raise HTTPException(status_code=404, detail="no stems found")
 
     def generate():
-        buf = io.BytesIO()
+        buf = _StreamBuf()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
             for f in wav_files:
                 zf.write(f, f.name)
-        buf.seek(0)
-        while chunk := buf.read(65536):
+                chunk = buf.drain()
+                if chunk:
+                    yield chunk
+        chunk = buf.drain()
+        if chunk:
             yield chunk
 
     safe = (job.title or job_id).replace("/", "_").replace("\\", "_").replace('"', "")[:80]

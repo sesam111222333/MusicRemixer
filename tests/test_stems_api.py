@@ -172,6 +172,37 @@ def test_zip_each_file_read_only_once_per_stream(client, tmp_path, monkeypatch):
         _cleanup(paths)
 
 
+def test_zip_does_not_buffer_archive_in_bytesio(client, monkeypatch):
+    """download_all_stems must not pass an io.BytesIO to ZipFile — that would
+    accumulate the full archive (all stems) in RAM before yielding the first byte."""
+    import io
+    import zipfile
+
+    # Spy on ZipFile.__init__ to record what file-like object is passed.
+    zip_file_types: list[str] = []
+    _real_init = zipfile.ZipFile.__init__
+
+    def _spy_init(self, file, *args, **kwargs):
+        zip_file_types.append(type(file).__name__)
+        _real_init(self, file, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "__init__", _spy_init)
+
+    job_id = "aabbcc445566"
+    paths = _setup_stems_job(job_id, {"vocals": b"RIFF" + b"\x00" * 44})
+    try:
+        r = client.get(f"/api/jobs/{job_id}/stems.zip")
+        assert r.status_code == 200
+        assert zip_file_types, "ZipFile was never created — generator did not run"
+        assert not any(t == "BytesIO" for t in zip_file_types), (
+            f"ZipFile was given an io.BytesIO buffer ({zip_file_types}) — "
+            "this loads the entire ZIP into RAM instead of streaming"
+        )
+    finally:
+        _cleanup(paths)
+
+
+
 # ---------------------------------------------------------------------------
 # Content-Disposition filename sanitization — double-quote in title
 # ---------------------------------------------------------------------------
