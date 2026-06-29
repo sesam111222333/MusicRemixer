@@ -239,6 +239,9 @@ def _fake_popen(fake_wav: bytes):
             self.stderr = io.BytesIO(b"")
             self.returncode = 0
 
+        def kill(self):
+            pass
+
         def wait(self):
             return 0
 
@@ -359,5 +362,59 @@ def test_remix_content_disposition_handles_non_latin1_title(client, monkeypatch)
         assert "content-disposition" in r.headers
         # Header value must be encodable as latin-1 (no UnicodeEncodeError)
         r.headers["content-disposition"].encode("latin-1")
+    finally:
+        _cleanup(paths)
+
+
+# ---------------------------------------------------------------------------
+# download_remix — ffmpeg process cleanup on client disconnect
+# ---------------------------------------------------------------------------
+
+
+def test_download_remix_kills_ffmpeg_on_client_disconnect(client, monkeypatch):
+    """When the client disconnects mid-stream, proc.kill() must be called.
+
+    Without kill(), ffmpeg blocks writing to a full OS pipe buffer and never
+    exits, so proc.stderr.read() and proc.wait() in the finally block block
+    forever — hanging the Starlette worker thread permanently.
+    """
+    import io
+    import subprocess
+
+    kill_called: list[bool] = []
+
+    class _TrackingPopen:
+        def __init__(self, *args, **kwargs):
+            self.stdout = io.BytesIO(b"\x00" * 131072)  # 128 KB — won't be fully consumed
+            self.stderr = io.BytesIO(b"")
+            self.returncode = 0
+
+        def kill(self):
+            kill_called.append(True)
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", _TrackingPopen)
+
+    job_id = "aabbccddee0f"
+    job = Job(id=job_id, title="Kill Test")
+    job.status = "done"
+    _jobs[job_id] = job
+    paths = [_make_stem_file(job_id, "vocals", b"RIFF\x00\x00\x00\x00WAVE")]
+
+    try:
+        with client.stream(
+            "GET",
+            f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0",
+        ) as r:
+            assert r.status_code == 200
+            for _chunk in r.iter_bytes(chunk_size=65536):
+                break  # simulate client disconnect after first chunk
+        assert kill_called, (
+            "proc.kill() must be called when the client disconnects before ffmpeg "
+            "finishes — otherwise ffmpeg blocks on a full OS pipe buffer and the "
+            "Starlette worker thread hangs permanently"
+        )
     finally:
         _cleanup(paths)

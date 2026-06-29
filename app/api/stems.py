@@ -232,6 +232,7 @@ def download_remix(
                     break
                 yield chunk
         finally:
+            proc.kill()
             if proc.stderr:
                 proc.stderr.read()
             proc.wait()
