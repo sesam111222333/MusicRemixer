@@ -54,7 +54,11 @@ export function applyMix() {
     if (s.muted) effective = 0;
     else if (anySolo && !s.soloed) effective = 0;
     const idx = trackIndex[name];
-    if (idx !== undefined) multitrack.setTrackVolume(idx, effective * masterVolume);
+    if (idx !== undefined) {
+      multitrack.setTrackVolume(idx, effective * masterVolume);
+      const rate = Math.pow(2, (s.pitch ?? 0) / 12);
+      (multitrack.wavesurfers || multitrack._wavesurfers)?.[idx]?.setPlaybackRate(rate, false);
+    }
   }
 }
 
@@ -323,6 +327,7 @@ export function setPitch(name, semitones) {
   state.pitch = Math.round(Math.max(-12, Math.min(12, semitones)));
   const wrap = mixerEl.querySelector(`.pitch-control[data-stem="${name}"]`);
   if (wrap) refreshPitchControl(wrap, state.pitch);
+  applyMix();
   saveMix();
 }
 
@@ -350,6 +355,7 @@ function makePitchControl(stemName, color) {
     label.textContent = pitchLabel(v);
     const state = mixerState[stemName];
     if (state) state.pitch = v;
+    applyMix();
     saveMix();
   });
 
