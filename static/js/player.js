@@ -200,9 +200,11 @@ function _atomicResumeAll(els) {
   for (const el of els) {
     if (!el.paused) continue;
     el.paused = false;
+    const prevDetune = el.bufferNode?.detune?.value ?? 0;
     try { el.bufferNode?.disconnect(); } catch { /* ignore */ }
     const node = ctx.createBufferSource();
     node.buffer = el.buffer;
+    node.detune.value = prevDetune;
     node.connect(el.gainNode);
     if (el.playedDuration >= el.duration) el.playedDuration = 0;
     // Mirror the bundle's natural-end lifecycle: when a track plays through

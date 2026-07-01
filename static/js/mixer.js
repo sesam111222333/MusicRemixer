@@ -56,8 +56,10 @@ export function applyMix() {
     const idx = trackIndex[name];
     if (idx !== undefined) {
       multitrack.setTrackVolume(idx, effective * masterVolume);
-      const rate = Math.pow(2, (s.pitch ?? 0) / 12);
-      (multitrack.wavesurfers || multitrack._wavesurfers)?.[idx]?.setPlaybackRate(rate, false);
+      const pitchCents = (s.pitch ?? 0) * 100;
+      const ws = (multitrack.wavesurfers || multitrack._wavesurfers)?.[idx];
+      const mediaEl = ws?.getMediaElement?.();
+      if (mediaEl?.bufferNode?.detune) mediaEl.bufferNode.detune.value = pitchCents;
     }
   }
 }

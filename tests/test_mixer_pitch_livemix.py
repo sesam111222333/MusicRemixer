@@ -39,15 +39,15 @@ def _pitch_slider_input_handler(src):
     return m.group(1)
 
 
-def test_apply_mix_applies_pitch_via_playback_rate():
-    """applyMix() must apply state.pitch to each stem's wavesurfer playback rate."""
+def test_apply_mix_applies_pitch_via_detune():
+    """applyMix() must apply state.pitch to each stem via bufferNode.detune (not setPlaybackRate)."""
     body = _apply_mix_body(_src())
-    assert "setPlaybackRate" in body, (
-        "applyMix() does not call setPlaybackRate. "
-        "Pitch slider has no live effect because pitch is never applied during playback."
-    )
     assert "pitch" in body, (
         "applyMix() does not reference state.pitch at all."
+    )
+    assert "detune" in body, (
+        "applyMix() does not apply pitch. "
+        "Pitch slider has no live effect because pitch is never applied during playback."
     )
 
 
