@@ -39,15 +39,21 @@ def _pitch_slider_input_handler(src):
     return m.group(1)
 
 
-def test_apply_mix_applies_pitch_via_detune():
-    """applyMix() must apply state.pitch to each stem via bufferNode.detune (not setPlaybackRate)."""
+def test_apply_mix_does_not_apply_pitch_live():
+    """applyMix() must NOT apply pitch to the live bufferNode (neither detune nor setPlaybackRate).
+
+    Both detune and setPlaybackRate change computedPlaybackRate, desyncing the
+    pitched stem from the master clock. Pitch is preserved in mixerState so
+    that the export (remix.wav) can apply it correctly with FFmpeg asetrate+atempo.
+    """
     body = _apply_mix_body(_src())
-    assert "pitch" in body, (
-        "applyMix() does not reference state.pitch at all."
+    assert "detune" not in body, (
+        "applyMix() sets bufferNode.detune which changes computedPlaybackRate = "
+        "rate * 2^(detune/1200), desyncing the stem. Remove the detune assignment."
     )
-    assert "detune" in body, (
-        "applyMix() does not apply pitch. "
-        "Pitch slider has no live effect because pitch is never applied during playback."
+    assert "setPlaybackRate" not in body, (
+        "applyMix() calls setPlaybackRate which changes both pitch AND tempo. "
+        "This desyncs the pitched stem. Remove the setPlaybackRate call."
     )
 
 

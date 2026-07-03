@@ -48,27 +48,63 @@ def test_apply_mix_does_not_change_playback_rate():
     )
 
 
-def test_apply_mix_uses_detune_for_pitch():
-    """applyMix() must apply pitch via AudioBufferSourceNode.detune (pitch-only, no tempo change)."""
+def test_apply_mix_does_not_use_detune_for_pitch():
+    """applyMix() must NOT apply pitch via AudioBufferSourceNode.detune.
+
+    detune changes computedPlaybackRate = rate * 2^(detune/1200), so it alters
+    both pitch AND tempo — the same desync bug as setPlaybackRate. Pitch is
+    stored in mixerState for export (remix.wav asetrate+atempo) only.
+    """
     body = _apply_mix_body()
-    assert "detune" in body, (
-        "applyMix() does not use detune for pitch shifting. "
-        "Set bufferNode.detune.value = pitch_semitones * 100 (cents) — "
-        "this shifts pitch without affecting playback speed, preserving sync."
+    assert "detune" not in body, (
+        "applyMix() sets bufferNode.detune which changes computedPlaybackRate = "
+        "rate * 2^(detune/1200). This desyncs the pitched stem from the master "
+        "clock. Remove all detune assignments from applyMix()."
     )
 
 
-def test_atomic_resume_preserves_detune():
-    """_atomicResumeAll must copy detune from the outgoing bufferNode to the new one.
+def test_atomic_resume_does_not_preserve_detune():
+    """_atomicResumeAll must NOT copy detune from the outgoing bufferNode.
 
-    Without this, any pause/seek/resume resets detune to 0 on the fresh node
-    even though applyMix() just set the correct pitch. After resume the stem
-    would play at pitch=0 until the next applyMix() call.
+    Since applyMix() no longer sets detune, propagating a stale detune value
+    from the old node to the new one would re-introduce tempo desync on every
+    pause/seek/resume.
     """
     body = _atomic_resume_body()
-    assert "detune" in body, (
-        "_atomicResumeAll() does not reference detune. "
-        "When creating a new AudioBufferSourceNode, read prevDetune from the "
-        "outgoing el.bufferNode.detune.value and apply it to the new node so "
-        "pitch is preserved across pause/seek/resume."
+    assert "prevDetune" not in body, (
+        "_atomicResumeAll() copies prevDetune to the new bufferNode. "
+        "applyMix() no longer sets detune, so this propagates stale values. "
+        "Remove the prevDetune read and write."
+    )
+
+
+def test_apply_mix_does_not_set_detune_on_buffer_node():
+    """applyMix() must NOT set bufferNode.detune — detune changes computedPlaybackRate = rate * 2^(detune/1200).
+
+    A stem with +12 semitones of pitch plays at 2× speed, desyncing from the
+    master clock (which assumes rate=1 for all stems). This is the same bug as
+    the setPlaybackRate variant. Pitch must be stored in state for export only
+    (remix.wav uses FFmpeg asetrate+atempo for correct pitch-without-tempo-change).
+    """
+    body = _apply_mix_body()
+    assert "detune" not in body, (
+        "applyMix() sets bufferNode.detune which changes computedPlaybackRate = "
+        "rate * 2^(detune/1200). A stem pitched +12 st plays at 2× speed, "
+        "desyncing from the master clock. Remove the detune assignment; "
+        "pitch shift is only valid for the downloaded remix (asetrate+atempo)."
+    )
+
+
+def test_atomic_resume_does_not_copy_detune():
+    """_atomicResumeAll must NOT copy prevDetune to the new bufferNode.
+
+    Since applyMix() no longer sets detune on the bufferNode, copying the
+    outgoing node's detune value to the new node would perpetuate a stale
+    non-zero detune and re-introduce the tempo-desync bug on every resume.
+    """
+    body = _atomic_resume_body()
+    assert "prevDetune" not in body, (
+        "_atomicResumeAll() copies prevDetune from the old bufferNode to the new one. "
+        "Since applyMix() no longer sets detune, this propagates stale detune "
+        "and re-introduces the desync. Remove the prevDetune copy."
     )
