@@ -248,49 +248,62 @@ def _fake_popen(fake_wav: bytes):
     return _FakePopen
 
 
+def _fake_run(valid_wav: bytes):
+    """Return a fake subprocess.run that writes *valid_wav* to the output file path (cmd[-1])."""
+
+    class _R:
+        returncode = 0
+        stderr = b""
+
+    def _fr(cmd, **kwargs):
+        with open(cmd[-1], "wb") as fh:
+            fh.write(valid_wav)
+        return _R()
+
+    return _fr
+
+
 # ---------------------------------------------------------------------------
-# download_remix — streaming (no subprocess.run buffering)
+# download_remix — must use a temp file (not stdout pipe) for ffmpeg output
 # ---------------------------------------------------------------------------
 
 
-def test_download_remix_streams_via_popen_not_run(client, monkeypatch):
-    """download_remix must use subprocess.Popen (streaming) not subprocess.run.
-    subprocess.run(stdout=PIPE) buffers the full WAV in RAM before the first byte
-    is sent — ~200 MB for a 20-min stereo mix — causing OOM under concurrent load."""
-    import io
+def test_download_remix_uses_tempfile_not_pipe(client, monkeypatch):
+    """download_remix must write ffmpeg output to a seekable temp file, not stdout ('-').
+
+    Writing '-' (stdout) to ffmpeg produces a non-seekable pipe; ffmpeg cannot
+    seek back to fill in the RIFF/data chunk sizes and writes 0xFFFFFFFF instead.
+    subprocess.run with a real file path gives ffmpeg a seekable fd so it writes
+    the correct header sizes."""
     import subprocess
 
     job_id = "aabbccddeef0"
-    job = Job(id=job_id, title="Streaming Test")
+    job = Job(id=job_id, title="Tempfile Test")
     job.status = "done"
     _jobs[job_id] = job
 
-    fake_wav = b"RIFF\x00\x00\x00\x00WAVE" + b"\x00" * 256
+    fake_wav = b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32
     paths = [_make_stem_file(job_id, "vocals", b"RIFF\x00\x00\x00\x00WAVE")]
 
-    run_called: list[bool] = []
+    popen_called: list[bool] = []
 
-    def fake_run(*args, **kwargs):
-        run_called.append(True)
+    def spy_popen(*args, **kwargs):
+        popen_called.append(True)
+        return _fake_popen(fake_wav)(*args, **kwargs)
 
-        class _R:
-            returncode = 0
-            stdout = fake_wav
-            stderr = b""
-
-        return _R()
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr(subprocess, "Popen", _fake_popen(fake_wav))
+    monkeypatch.setattr(subprocess, "Popen", spy_popen)
+    monkeypatch.setattr(subprocess, "run", _fake_run(fake_wav))
 
     try:
         r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
-        assert not run_called, (
-            "subprocess.run must not be called — it buffers the full WAV in RAM. "
-            "Use subprocess.Popen to stream output chunk by chunk."
+        assert not popen_called, (
+            "subprocess.Popen must not be called — download_remix must use "
+            "subprocess.run with a temp file path so ffmpeg can seek back and "
+            "write correct WAV RIFF/data chunk sizes (Popen with stdout=PIPE gives "
+            "a non-seekable fd → 0xFFFFFFFF placeholder sizes)."
         )
         assert r.status_code == 200
-        assert r.content == fake_wav
+        assert r.headers["content-type"] == "audio/wav"
     finally:
         _cleanup(paths)
 
@@ -307,7 +320,7 @@ def test_remix_content_disposition_sanitizes_double_quotes(client, monkeypatch):
 
     fake_wav = b"RIFF\x00\x00\x00\x00WAVE"
 
-    monkeypatch.setattr(subprocess, "Popen", _fake_popen(fake_wav))
+    monkeypatch.setattr(subprocess, "run", _fake_run(fake_wav))
 
     try:
         r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
@@ -354,7 +367,7 @@ def test_remix_content_disposition_handles_non_latin1_title(client, monkeypatch)
 
     fake_wav = b"RIFF\x00\x00\x00\x00WAVE"
 
-    monkeypatch.setattr(subprocess, "Popen", _fake_popen(fake_wav))
+    monkeypatch.setattr(subprocess, "run", _fake_run(fake_wav))
 
     try:
         r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
@@ -367,54 +380,145 @@ def test_remix_content_disposition_handles_non_latin1_title(client, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
-# download_remix — ffmpeg process cleanup on client disconnect
+# download_remix — temp file cleanup after streaming
 # ---------------------------------------------------------------------------
 
 
-def test_download_remix_kills_ffmpeg_on_client_disconnect(client, monkeypatch):
-    """When the client disconnects mid-stream, proc.kill() must be called.
+def test_download_remix_tempfile_deleted_after_streaming(client, monkeypatch):
+    """The temp WAV file created for ffmpeg output must be deleted after streaming.
 
-    Without kill(), ffmpeg blocks writing to a full OS pipe buffer and never
-    exits, so proc.stderr.read() and proc.wait() in the finally block block
-    forever — hanging the Starlette worker thread permanently.
+    download_remix writes ffmpeg output to a seekable temp file (instead of piping
+    to stdout) so the WAV header sizes are correct.  The generate() finally block
+    must delete that file to prevent disk-space leaks on every remix download.
     """
-    import io
+    import os
     import subprocess
-
-    kill_called: list[bool] = []
-
-    class _TrackingPopen:
-        def __init__(self, *args, **kwargs):
-            self.stdout = io.BytesIO(b"\x00" * 131072)  # 128 KB — won't be fully consumed
-            self.stderr = io.BytesIO(b"")
-            self.returncode = 0
-
-        def kill(self):
-            kill_called.append(True)
-
-        def wait(self):
-            return 0
-
-    monkeypatch.setattr(subprocess, "Popen", _TrackingPopen)
+    import tempfile as tempfile_module
 
     job_id = "aabbccddee0f"
-    job = Job(id=job_id, title="Kill Test")
+    job = Job(id=job_id, title="Cleanup Test")
     job.status = "done"
     _jobs[job_id] = job
     paths = [_make_stem_file(job_id, "vocals", b"RIFF\x00\x00\x00\x00WAVE")]
 
+    # Track the temp file paths created inside download_remix.
+    created_paths: list[str] = []
+    _orig_mkstemp = tempfile_module.mkstemp
+
+    def spy_mkstemp(suffix="", prefix="tmp", dir=None, text=False):
+        fd, path = _orig_mkstemp(suffix=suffix, prefix=prefix, dir=dir, text=text)
+        created_paths.append(path)
+        return fd, path
+
+    monkeypatch.setattr(tempfile_module, "mkstemp", spy_mkstemp)
+    monkeypatch.setattr(subprocess, "run", _fake_run(b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32))
+
     try:
-        with client.stream(
-            "GET",
-            f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0",
-        ) as r:
-            assert r.status_code == 200
-            for _chunk in r.iter_bytes(chunk_size=65536):
-                break  # simulate client disconnect after first chunk
-        assert kill_called, (
-            "proc.kill() must be called when the client disconnects before ffmpeg "
-            "finishes — otherwise ffmpeg blocks on a full OS pipe buffer and the "
-            "Starlette worker thread hangs permanently"
+        r = client.get(
+            f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0"
+        )
+        assert r.status_code == 200
+        assert created_paths, "download_remix must create a temp file for ffmpeg output"
+        for tmp_path in created_paths:
+            assert not os.path.exists(tmp_path), (
+                f"Temp WAV file {tmp_path!r} was not deleted after streaming — "
+                "disk-space leak on every remix download"
+            )
+    finally:
+        for p in created_paths:
+            try:
+                os.unlink(p)
+            except FileNotFoundError:
+                pass
+        _cleanup(paths)
+
+
+# ---------------------------------------------------------------------------
+# download_remix — WAV header validity (RIFF/data chunk sizes must not be 0xFFFFFFFF)
+# ---------------------------------------------------------------------------
+
+
+def test_remix_wav_header_sizes_are_valid(client, monkeypatch):
+    """The downloaded WAV must have valid RIFF and data chunk sizes, not 0xFFFFFFFF.
+
+    ffmpeg writing WAV to stdout (a non-seekable pipe) cannot seek back to fill in
+    the RIFF chunk size (bytes 4-7) or the data chunk size (bytes 40-43), so it
+    writes the placeholder 0xFFFFFFFF.  Strict parsers (Python wave module, many DAWs,
+    Windows Media Player) interpret this as ~48 695 seconds of audio even for a 2-second
+    mix, and seek is broken.  The fix must write to a seekable temp file instead.
+    """
+    import io
+    import struct
+    import subprocess
+
+    job_id = "aabbccddeef2"
+    job = Job(id=job_id, title="Header Fix Test")
+    job.status = "done"
+    _jobs[job_id] = job
+    paths = [_make_stem_file(job_id, "vocals", b"RIFF\x00\x00\x00\x00WAVE")]
+
+    # A minimal valid WAV (0 audio samples) with correct RIFF/data sizes.
+    _data_size = 0
+    _VALID_WAV = (
+        b"RIFF" + struct.pack("<I", 36 + _data_size) + b"WAVE"
+        + b"fmt " + struct.pack("<I", 16)
+        + struct.pack("<H", 1)            # PCM
+        + struct.pack("<H", 2)            # stereo
+        + struct.pack("<I", 44100)        # sample rate
+        + struct.pack("<I", 44100 * 4)    # byte rate
+        + struct.pack("<H", 4)            # block align
+        + struct.pack("<H", 16)           # bits per sample
+        + b"data" + struct.pack("<I", _data_size)
+    )
+
+    # Simulate what ffmpeg produces when writing WAV to a non-seekable pipe:
+    # both sizes are the placeholder 0xFFFFFFFF because ffmpeg cannot seek back.
+    _PIPE_WAV = bytearray(_VALID_WAV)
+    _PIPE_WAV[4:8] = b"\xff\xff\xff\xff"   # RIFF chunk size — placeholder
+    _PIPE_WAV[40:44] = b"\xff\xff\xff\xff"  # data chunk size — placeholder
+    _PIPE_WAV = bytes(_PIPE_WAV)
+
+    def fake_popen(cmd, **kwargs):
+        # Old (buggy) path: ffmpeg writes WAV to stdout pipe → 0xFFFFFFFF sizes.
+        class _P:
+            stdout = io.BytesIO(_PIPE_WAV)
+            stderr = io.BytesIO(b"")
+            returncode = 0
+            def kill(self): pass
+            def wait(self): return 0
+        return _P()
+
+    def fake_run(cmd, **kwargs):
+        # Fixed path: ffmpeg writes to a seekable file → correct sizes.
+        out_path = cmd[-1]
+        with open(out_path, "wb") as fh:
+            fh.write(_VALID_WAV)
+        class _R:
+            returncode = 0
+            stderr = b""
+        return _R()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    try:
+        r = client.get(
+            f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0"
+        )
+        assert r.status_code == 200
+        body = r.content
+
+        riff_size = struct.unpack_from("<I", body, 4)[0]
+        assert riff_size != 0xFFFFFFFF, (
+            "RIFF chunk size is 0xFFFFFFFF — ffmpeg is writing WAV to a stdout pipe "
+            "and cannot seek back to fill in the correct size. "
+            "Write to a temp file (not '-') so ffmpeg can fix the header."
+        )
+
+        data_size_field = struct.unpack_from("<I", body, 40)[0]
+        assert data_size_field != 0xFFFFFFFF, (
+            "WAV data chunk size is 0xFFFFFFFF — ffmpeg pipe placeholder. "
+            "Write to a temp file so ffmpeg can write the correct data size."
         )
     finally:
         _cleanup(paths)

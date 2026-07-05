@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import math
+import os
 import subprocess
+import tempfile
 import zipfile
 
 from fastapi import APIRouter, HTTPException, Query
@@ -212,30 +214,33 @@ def download_remix(
             )
     mixed_inputs = "".join(f"[a{i}]" for i in range(len(triples)))
     filter_complex = ";".join(filter_parts) + f";{mixed_inputs}amix=inputs={len(triples)}:normalize=0[out]"
-    cmd += ["-filter_complex", filter_complex, "-map", "[out]", "-f", "wav", "-"]
+    # Write to a temp file so ffmpeg can seek back and fill in the WAV RIFF/data
+    # chunk sizes correctly.  Writing to stdout ('-') gives a non-seekable pipe,
+    # which forces ffmpeg to write the placeholder 0xFFFFFFFF for both sizes.
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+    os.close(tmp_fd)
+    cmd += ["-filter_complex", filter_complex, "-map", "[out]", "-f", "wav", tmp_path]
 
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        result = subprocess.run(cmd, stderr=subprocess.PIPE)
     except OSError as exc:
+        os.unlink(tmp_path)
         raise HTTPException(status_code=500, detail=f"ffmpeg unavailable: {exc}")
 
+    if result.returncode != 0:
+        os.unlink(tmp_path)
+        raise HTTPException(
+            status_code=500,
+            detail=f"ffmpeg: {result.stderr.decode(errors='replace')}",
+        )
+
     def generate():
-        assert proc.stdout is not None
         try:
-            while True:
-                chunk = proc.stdout.read(65536)
-                if not chunk:
-                    break
-                yield chunk
+            with open(tmp_path, "rb") as fh:
+                while chunk := fh.read(65536):
+                    yield chunk
         finally:
-            proc.kill()
-            if proc.stderr:
-                proc.stderr.read()
-            proc.wait()
+            os.unlink(tmp_path)
 
     safe = (job.title or job_id).replace("/", "_").replace("\\", "_").replace('"', "")[:80]
     safe = safe.encode("latin-1", errors="replace").decode("latin-1").replace("?", "_")
