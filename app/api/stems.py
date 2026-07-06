@@ -112,10 +112,16 @@ def download_all_stems(job_id: str) -> StreamingResponse:
         buf = _StreamBuf()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
             for f in wav_files:
-                zf.write(f, f.name)
-                chunk = buf.drain()
-                if chunk:
-                    yield chunk
+                with zf.open(f.name, "w") as zentry:
+                    with open(f, "rb") as src:
+                        while chunk := src.read(65536):
+                            zentry.write(chunk)
+                            data = buf.drain()
+                            if data:
+                                yield data
+                data = buf.drain()
+                if data:
+                    yield data
         chunk = buf.drain()
         if chunk:
             yield chunk

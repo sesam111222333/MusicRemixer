@@ -202,6 +202,41 @@ def test_zip_does_not_buffer_archive_in_bytesio(client, monkeypatch):
         _cleanup(paths)
 
 
+def test_zip_does_not_buffer_whole_stem_file(client, monkeypatch):
+    """generate() must drain in small chunks, not buffer the entire WAV before yielding.
+
+    Bug: zf.write(f, f.name) writes the whole file into _StreamBuf._data before
+    returning, so drain() is called once with all bytes accumulated.  A 400 MB stem
+    causes a 400 MB transient spike.  Fix: use zf.open() and write in 64 KB chunks.
+    """
+    from app.api.stems import _StreamBuf
+
+    CHUNK_SIZE = 65536
+    FILE_SIZE = CHUNK_SIZE * 8  # 512 KB — clearly larger than one chunk
+
+    job_id = "aabbcc667788"
+    paths = _setup_stems_job(job_id, {"vocals": b"\x00" * FILE_SIZE})
+
+    max_buf: list[int] = [0]
+    _orig_drain = _StreamBuf.drain
+
+    def spy_drain(self):
+        max_buf[0] = max(max_buf[0], len(self._data))
+        return _orig_drain(self)
+
+    monkeypatch.setattr(_StreamBuf, "drain", spy_drain)
+
+    try:
+        r = client.get(f"/api/jobs/{job_id}/stems.zip")
+        assert r.status_code == 200
+        assert max_buf[0] <= CHUNK_SIZE * 2, (
+            f"_StreamBuf grew to {max_buf[0]} bytes before drain "
+            f"(expected <= {CHUNK_SIZE * 2} = 2 x CHUNK_SIZE). "
+            "zf.write() is buffering the entire stem — use zf.open() with chunked reads."
+        )
+    finally:
+        _cleanup(paths)
+
 
 # ---------------------------------------------------------------------------
 # Content-Disposition filename sanitization — double-quote in title
