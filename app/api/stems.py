@@ -170,17 +170,22 @@ def download_remix(
         raise HTTPException(status_code=404, detail="job not ready")
 
     stem_names = [s.strip() for s in stems.split(",") if s.strip()]
-    vol_values = [v.strip() for v in volumes.split(",") if v.strip()]
-    pitch_values = [p.strip() for p in pitches.split(",") if p.strip()]
 
     if not stem_names:
         raise HTTPException(status_code=422, detail="no stems specified")
 
-    # Pad missing volumes and pitches with defaults
-    while len(vol_values) < len(stem_names):
-        vol_values.append("1.0")
-    while len(pitch_values) < len(stem_names):
-        pitch_values.append("0")
+    # Keep positional alignment: an empty slot (",,") means "use default",
+    # not "compact the list". Filtering empties would shift all later values.
+    _raw_vols = [v.strip() for v in volumes.split(",")] if volumes else []
+    _raw_pitches = [p.strip() for p in pitches.split(",")] if pitches else []
+    vol_values = [
+        (_raw_vols[i] if i < len(_raw_vols) and _raw_vols[i] else "1.0")
+        for i in range(len(stem_names))
+    ]
+    pitch_values = [
+        (_raw_pitches[i] if i < len(_raw_pitches) and _raw_pitches[i] else "0")
+        for i in range(len(stem_names))
+    ]
 
     stems_dir = (JOBS_DIR / job_id / "stems").resolve()
     triples: list[tuple[str, float, int]] = []

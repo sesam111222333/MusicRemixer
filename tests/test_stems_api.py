@@ -473,6 +473,83 @@ def test_download_remix_tempfile_deleted_after_streaming(client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_remix_empty_volume_slot_uses_default_not_shifts(client, monkeypatch):
+    """Empty slot in volumes/pitches must be treated as default, not compacted.
+
+    GET remix.wav?stems=vocals,drums,bass&volumes=0.5,,0.8 should map:
+      vocals → 0.5, drums → 1.0 (default), bass → 0.8
+
+    Bug: filtering out empty elements with `if v.strip()` compacts the list to
+    ["0.5", "0.8"], then padding appends "1.0" at the end, giving
+      vocals → 0.5, drums → 0.8, bass → 1.0  ← shifted by one.
+    """
+    import subprocess
+
+    job_id = "aabbccddeea1"
+    job = Job(id=job_id, title="Empty Slot Test")
+    job.status = "done"
+    _jobs[job_id] = job
+    paths = [
+        _make_stem_file(job_id, "vocals", b"RIFF\x00\x00\x00\x00WAVE"),
+        _make_stem_file(job_id, "drums", b"RIFF\x00\x00\x00\x00WAVE"),
+        _make_stem_file(job_id, "bass", b"RIFF\x00\x00\x00\x00WAVE"),
+    ]
+
+    captured_cmd: list[list[str]] = []
+
+    def spy_run(cmd, **kwargs):
+        captured_cmd.append(list(cmd))
+
+        class _R:
+            returncode = 0
+            stderr = b""
+
+        out_path = cmd[-1]
+        with open(out_path, "wb") as fh:
+            fh.write(b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32)
+        return _R()
+
+    monkeypatch.setattr(subprocess, "run", spy_run)
+
+    try:
+        r = client.get(
+            f"/api/jobs/{job_id}/remix.wav?stems=vocals,drums,bass&volumes=0.5,,0.8&pitches=,,3"
+        )
+        assert r.status_code == 200
+        assert captured_cmd, "subprocess.run was never called"
+
+        cmd = captured_cmd[0]
+        # Find the -filter_complex argument
+        fc_idx = cmd.index("-filter_complex")
+        filter_complex = cmd[fc_idx + 1]
+
+        # vocals (index 0): volume must be 0.5
+        assert "[0]volume=0.500000" in filter_complex, (
+            f"vocals must have volume=0.5; got filter_complex={filter_complex!r}"
+        )
+        # drums (index 1): empty volume slot → default 1.0
+        assert "[1]volume=1.000000" in filter_complex, (
+            f"drums must have volume=1.0 (default for empty slot); "
+            f"got filter_complex={filter_complex!r}"
+        )
+        # bass (index 2): volume must be 0.8
+        assert "[2]volume=0.800000" in filter_complex, (
+            f"bass must have volume=0.8; got filter_complex={filter_complex!r}"
+        )
+
+        # pitches: vocals=0 (empty→default), drums=0 (empty→default), bass=3
+        # When pitch==0 the filter looks like [N]volume=...[aN] with no asetrate.
+        # When pitch==3 it contains asetrate.
+        assert "asetrate" not in filter_complex.split("[2]")[0].rsplit("[1]", 1)[-1], (
+            f"drums must have no pitch shift; got filter_complex={filter_complex!r}"
+        )
+        assert "asetrate" in filter_complex.split("[2]")[1], (
+            f"bass must have pitch shift (semitone 3); got filter_complex={filter_complex!r}"
+        )
+    finally:
+        _cleanup(paths)
+
+
 def test_remix_wav_header_sizes_are_valid(client, monkeypatch):
     """The downloaded WAV must have valid RIFF and data chunk sizes, not 0xFFFFFFFF.
 
