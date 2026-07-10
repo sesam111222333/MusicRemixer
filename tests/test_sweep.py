@@ -9,15 +9,17 @@ import pytest
 
 from app.core.models import Job
 from app.core.persistence import load_all_jobs
-from app.core.registry import _jobs
+from app.core.registry import _jobs, _readers, dec_readers, inc_readers
 from app.pipeline.collect import sweep_old_jobs
 
 
 @pytest.fixture(autouse=True)
 def _isolate_registry():
     _jobs.clear()
+    _readers.clear()
     yield
     _jobs.clear()
+    _readers.clear()
 
 
 def _mkdir(jobs_dir: Path, name: str) -> Path:
@@ -131,3 +133,23 @@ def test_restored_job_swept_after_ttl(tmp_path: Path):
 
     assert not job_dir.exists(), "restored job directory was not swept despite old created_at"
     assert "oldrestorejob" not in _jobs
+
+
+def test_skip_terminal_job_with_active_readers(tmp_path: Path):
+    """sweep_old_jobs must not delete a terminal, expired job directory while
+    it has active HTTP readers (e.g. a stem is currently being streamed)."""
+    d = _mkdir(tmp_path, "abcdefabcdeb")
+    job = Job(id="abcdefabcdeb")
+    job.status = "done"
+    job.created_at = time.time() - 999_999  # ancient — well past any TTL
+    _jobs[job.id] = job
+
+    inc_readers(job.id)
+    try:
+        with patch("app.pipeline.collect.JOB_TTL_SECONDS", 60):
+            sweep_old_jobs(tmp_path)
+    finally:
+        dec_readers(job.id)
+
+    assert d.is_dir(), "directory must not be deleted while a reader is active"
+    assert job.id in _jobs, "registry entry must not be removed while a reader is active"

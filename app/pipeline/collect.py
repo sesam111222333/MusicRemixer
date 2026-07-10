@@ -9,6 +9,7 @@ from pathlib import Path
 from app.core.config import JOB_TTL_SECONDS
 from app.core.models import Job
 from app.core.registry import all_jobs as registry_all
+from app.core.registry import has_readers as registry_has_readers
 from app.core.registry import remove as registry_remove
 from app.core.registry import set_proc
 
@@ -190,6 +191,8 @@ def sweep_old_jobs(jobs_dir: Path) -> None:
                 continue  # never delete an active job's working dir
             if job.created_at >= cutoff:
                 continue
+            if registry_has_readers(d.name):
+                continue  # stem files are actively being streamed; defer deletion
         elif d.stat().st_mtime >= cutoff:
             continue
         shutil.rmtree(d, ignore_errors=True)

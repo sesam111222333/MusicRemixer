@@ -6,11 +6,11 @@ import subprocess
 import tempfile
 import zipfile
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from app.core.config import JOB_ID_RE, JOBS_DIR, STEM_NAMES
-from app.core.registry import get as registry_get
+from app.core.registry import dec_readers, get as registry_get, inc_readers
 
 router = APIRouter(tags=["stems"])
 
@@ -50,8 +50,10 @@ def head_stem(job_id: str, name: str) -> Response:
 
 
 @router.get("/jobs/{job_id}/stems/{name}.wav")
-def get_stem(job_id: str, name: str) -> FileResponse:
+def get_stem(job_id: str, name: str, background_tasks: BackgroundTasks) -> FileResponse:
     path = _resolve_stem_path(job_id, name)
+    inc_readers(job_id)
+    background_tasks.add_task(dec_readers, job_id)
     return FileResponse(
         path,
         media_type="audio/wav",
@@ -108,23 +110,28 @@ def download_all_stems(job_id: str) -> StreamingResponse:
     if not wav_files:
         raise HTTPException(status_code=404, detail="no stems found")
 
+    inc_readers(job_id)
+
     def generate():
-        buf = _StreamBuf()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
-            for f in wav_files:
-                with zf.open(f.name, "w") as zentry:
-                    with open(f, "rb") as src:
-                        while chunk := src.read(65536):
-                            zentry.write(chunk)
-                            data = buf.drain()
-                            if data:
-                                yield data
-                data = buf.drain()
-                if data:
-                    yield data
-        chunk = buf.drain()
-        if chunk:
-            yield chunk
+        try:
+            buf = _StreamBuf()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+                for f in wav_files:
+                    with zf.open(f.name, "w") as zentry:
+                        with open(f, "rb") as src:
+                            while chunk := src.read(65536):
+                                zentry.write(chunk)
+                                data = buf.drain()
+                                if data:
+                                    yield data
+                    data = buf.drain()
+                    if data:
+                        yield data
+            chunk = buf.drain()
+            if chunk:
+                yield chunk
+        finally:
+            dec_readers(job_id)
 
     safe = (job.title or job_id).replace("/", "_").replace("\\", "_").replace('"', "")[:80]
     safe = safe.encode("latin-1", errors="replace").decode("latin-1").replace("?", "_")
@@ -232,14 +239,17 @@ def download_remix(
     os.close(tmp_fd)
     cmd += ["-filter_complex", filter_complex, "-map", "[out]", "-f", "wav", tmp_path]
 
+    inc_readers(job_id)
     try:
         result = subprocess.run(cmd, stderr=subprocess.PIPE)
     except OSError as exc:
         os.unlink(tmp_path)
+        dec_readers(job_id)
         raise HTTPException(status_code=500, detail=f"ffmpeg unavailable: {exc}")
 
     if result.returncode != 0:
         os.unlink(tmp_path)
+        dec_readers(job_id)
         raise HTTPException(
             status_code=500,
             detail=f"ffmpeg: {result.stderr.decode(errors='replace')}",
@@ -251,6 +261,7 @@ def download_remix(
                 while chunk := fh.read(65536):
                     yield chunk
         finally:
+            dec_readers(job_id)
             os.unlink(tmp_path)
 
     safe = (job.title or job_id).replace("/", "_").replace("\\", "_").replace('"', "")[:80]
