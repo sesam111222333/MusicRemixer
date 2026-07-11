@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import JOBS_DIR
 from app.core.models import Job
-from app.core.registry import _jobs
+from app.core.registry import _jobs, _readers
 
 
 @pytest.fixture(autouse=True)
@@ -634,3 +634,62 @@ def test_remix_wav_header_sizes_are_valid(client, monkeypatch):
         )
     finally:
         _cleanup(paths)
+
+
+# ---------------------------------------------------------------------------
+# Race condition: sweep_old_jobs must not delete a job directory between
+# path.is_file() and inc_readers in get_stem.
+# ---------------------------------------------------------------------------
+
+def test_get_stem_not_500_when_sweep_races(monkeypatch):
+    """get_stem must not return 500 if sweep_old_jobs runs after is_file()
+    returns True but before inc_readers is called.
+
+    Regression: inc_readers was called AFTER _resolve_stem_path, leaving a window
+    where sweep could delete the directory between the is_file() check and
+    inc_readers.  Fix: inc_readers must be called BEFORE _resolve_stem_path so
+    sweep sees has_readers=True and defers deletion.
+    """
+    import shutil
+    from unittest.mock import patch
+
+    from app.api import stems as stems_module
+    from app.pipeline.collect import sweep_old_jobs
+
+    job_id = "aabbccddff01"
+    job = Job(id=job_id)
+    job.status = "done"
+    job.created_at = 0.0  # ancient — would be swept under any TTL
+    _jobs[job_id] = job
+
+    path = _make_stem_file(job_id, "vocals", b"RIFF" + b"\x00" * 44)
+    job_dir = path.parent.parent
+
+    _orig_resolve = stems_module._resolve_stem_path
+
+    def _resolve_then_sweep(jid, name):
+        result = _orig_resolve(jid, name)
+        # Simulate sweep racing after is_file() passes inside _resolve_stem_path.
+        # With fix (inc_readers before _resolve_stem_path): sweep sees
+        # has_readers=True → skips deletion → FileResponse 200.
+        # Without fix (inc_readers after _resolve_stem_path): sweep sees
+        # has_readers=False → deletes directory → FileResponse raises → 500.
+        with patch("app.pipeline.collect.JOB_TTL_SECONDS", 1):
+            sweep_old_jobs(JOBS_DIR)
+        return result
+
+    monkeypatch.setattr(stems_module, "_resolve_stem_path", _resolve_then_sweep)
+
+    from app.main import app as main_app
+    tc = TestClient(main_app, raise_server_exceptions=False)
+    try:
+        r = tc.get(f"/api/jobs/{job_id}/stems/vocals.wav")
+        assert r.status_code == 200, (
+            f"Expected 200 but got {r.status_code}: "
+            "inc_readers was called after _resolve_stem_path, so sweep could delete "
+            "the job directory between path.is_file() and inc_readers, causing a 500."
+        )
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        _readers.pop(job_id, None)
+        _jobs.pop(job_id, None)

@@ -51,8 +51,14 @@ def head_stem(job_id: str, name: str) -> Response:
 
 @router.get("/jobs/{job_id}/stems/{name}.wav")
 def get_stem(job_id: str, name: str, background_tasks: BackgroundTasks) -> FileResponse:
-    path = _resolve_stem_path(job_id, name)
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
     inc_readers(job_id)
+    try:
+        path = _resolve_stem_path(job_id, name)
+    except HTTPException:
+        dec_readers(job_id)
+        raise
     background_tasks.add_task(dec_readers, job_id)
     return FileResponse(
         path,
@@ -103,14 +109,15 @@ def download_all_stems(job_id: str) -> StreamingResponse:
     job = registry_get(job_id)
     if job is None or job.status != "done":
         raise HTTPException(status_code=404, detail="job not ready")
+    inc_readers(job_id)
     stems_dir = (JOBS_DIR / job_id / "stems").resolve()
     if not stems_dir.is_dir() or not stems_dir.is_relative_to(JOBS_DIR.resolve()):
+        dec_readers(job_id)
         raise HTTPException(status_code=404, detail="stems not found")
     wav_files = sorted(stems_dir.glob("*.wav"))
     if not wav_files:
+        dec_readers(job_id)
         raise HTTPException(status_code=404, detail="no stems found")
-
-    inc_readers(job_id)
 
     def generate():
         try:
@@ -195,6 +202,7 @@ def download_remix(
     ]
 
     stems_dir = (JOBS_DIR / job_id / "stems").resolve()
+    inc_readers(job_id)
     triples: list[tuple[str, float, int]] = []
     for name, vol_str, pitch_str in zip(stem_names, vol_values, pitch_values):
         if name not in _ALLOWED_NAMES:
@@ -210,6 +218,7 @@ def download_remix(
         triples.append((name, vol, pitch))
 
     if not triples:
+        dec_readers(job_id)
         raise HTTPException(status_code=404, detail="no valid stems found")
 
     cmd: list[str] = ["ffmpeg", "-nostdin", "-y", "-loglevel", "error"]
@@ -239,7 +248,6 @@ def download_remix(
     os.close(tmp_fd)
     cmd += ["-filter_complex", filter_complex, "-map", "[out]", "-f", "wav", tmp_path]
 
-    inc_readers(job_id)
     try:
         result = subprocess.run(cmd, stderr=subprocess.PIPE)
     except OSError as exc:
