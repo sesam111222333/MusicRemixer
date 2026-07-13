@@ -53,7 +53,8 @@ def head_stem(job_id: str, name: str) -> Response:
 def get_stem(job_id: str, name: str, background_tasks: BackgroundTasks) -> FileResponse:
     if not JOB_ID_RE.match(job_id):
         raise HTTPException(status_code=404, detail="job not found")
-    inc_readers(job_id)
+    if not inc_readers(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
     try:
         path = _resolve_stem_path(job_id, name)
     except HTTPException:
@@ -109,7 +110,8 @@ def download_all_stems(job_id: str) -> StreamingResponse:
     job = registry_get(job_id)
     if job is None or job.status != "done":
         raise HTTPException(status_code=404, detail="job not ready")
-    inc_readers(job_id)
+    if not inc_readers(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
     stems_dir = (JOBS_DIR / job_id / "stems").resolve()
     if not stems_dir.is_dir() or not stems_dir.is_relative_to(JOBS_DIR.resolve()):
         dec_readers(job_id)
@@ -202,7 +204,8 @@ def download_remix(
     ]
 
     stems_dir = (JOBS_DIR / job_id / "stems").resolve()
-    inc_readers(job_id)
+    if not inc_readers(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
     triples: list[tuple[str, float, int]] = []
     for name, vol_str, pitch_str in zip(stem_names, vol_values, pitch_values):
         if name not in _ALLOWED_NAMES:
