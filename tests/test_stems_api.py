@@ -695,6 +695,60 @@ def test_get_stem_not_500_when_sweep_races(monkeypatch):
         _jobs.pop(job_id, None)
 
 
+def test_head_stem_not_500_when_sweep_races(monkeypatch):
+    """head_stem must not return 500 if sweep_old_jobs deletes the job directory
+    between _resolve_stem_path (path.is_file() check) and path.stat().
+
+    Bug: head_stem never calls inc_readers, so sweep can delete the directory in
+    that window and path.stat() raises FileNotFoundError → unhandled → 500.
+    Fix: call inc_readers before _resolve_stem_path (as get_stem does) so sweep
+    sees has_readers=True and defers deletion while the HEAD request is in flight.
+    """
+    import shutil
+    from unittest.mock import patch
+
+    from app.api import stems as stems_module
+    from app.pipeline.collect import sweep_old_jobs
+
+    job_id = "aabbccddff02"
+    job = Job(id=job_id)
+    job.status = "done"
+    job.created_at = 0.0  # ancient — swept under any TTL
+    _jobs[job_id] = job
+
+    path = _make_stem_file(job_id, "vocals", b"RIFF" + b"\x00" * 44)
+    job_dir = path.parent.parent
+
+    _orig_resolve = stems_module._resolve_stem_path
+
+    def _resolve_then_sweep(jid, name):
+        result = _orig_resolve(jid, name)
+        # Sweep races between path.is_file() (in _resolve_stem_path) and path.stat()
+        # (in head_stem). With fix (inc_readers before _resolve_stem_path): sweep
+        # sees has_readers=True → defers deletion → head_stem returns 200.
+        # Without fix (no inc_readers): sweep deletes directory → path.stat() raises
+        # FileNotFoundError → 500.
+        with patch("app.pipeline.collect.JOB_TTL_SECONDS", 1):
+            sweep_old_jobs(JOBS_DIR)
+        return result
+
+    monkeypatch.setattr(stems_module, "_resolve_stem_path", _resolve_then_sweep)
+
+    from app.main import app as main_app
+    tc = TestClient(main_app, raise_server_exceptions=False)
+    try:
+        r = tc.head(f"/api/jobs/{job_id}/stems/vocals.wav")
+        assert r.status_code == 200, (
+            f"head_stem returned {r.status_code} instead of 200: sweep deleted the "
+            "job directory between _resolve_stem_path and path.stat(). "
+            "Call inc_readers before _resolve_stem_path to block sweep."
+        )
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        _readers.pop(job_id, None)
+        _jobs.pop(job_id, None)
+
+
 # ---------------------------------------------------------------------------
 # Reader-count leak on aborted download (client disconnect mid-stream)
 # ---------------------------------------------------------------------------

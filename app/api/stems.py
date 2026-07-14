@@ -37,16 +37,27 @@ def _resolve_stem_path(job_id: str, name: str):
 
 @router.head("/jobs/{job_id}/stems/{name}.wav")
 def head_stem(job_id: str, name: str) -> Response:
-    path = _resolve_stem_path(job_id, name)
-    return Response(
-        status_code=200,
-        headers={
-            "content-type": "audio/wav",
-            "content-length": str(path.stat().st_size),
-            "accept-ranges": "bytes",
-            "content-disposition": f'inline; filename="{name}.wav"',
-        },
-    )
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
+    if not inc_readers(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
+    try:
+        path = _resolve_stem_path(job_id, name)
+        try:
+            size = path.stat().st_size
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="stem not found")
+        return Response(
+            status_code=200,
+            headers={
+                "content-type": "audio/wav",
+                "content-length": str(size),
+                "accept-ranges": "bytes",
+                "content-disposition": f'inline; filename="{name}.wav"',
+            },
+        )
+    finally:
+        dec_readers(job_id)
 
 
 @router.get("/jobs/{job_id}/stems/{name}.wav")
