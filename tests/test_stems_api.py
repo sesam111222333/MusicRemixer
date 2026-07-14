@@ -693,3 +693,66 @@ def test_get_stem_not_500_when_sweep_races(monkeypatch):
         shutil.rmtree(job_dir, ignore_errors=True)
         _readers.pop(job_id, None)
         _jobs.pop(job_id, None)
+
+
+# ---------------------------------------------------------------------------
+# Reader-count leak on aborted download (client disconnect mid-stream)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_stem_dec_readers_on_aborted_download():
+    """_readers must reach zero even when the client disconnects mid-stream.
+
+    Bug: get_stem registered dec_readers via background_tasks.add_task.
+    Starlette only runs BackgroundTasks after the HTTP send loop completes
+    normally — if send() raises on disconnect, the task never executes and
+    _readers[job_id] stays > 0 forever, blocking sweep_old_jobs forever.
+    Fix: use StreamingResponse with a try/finally generator, mirroring the
+    zip and remix endpoints.
+    """
+    import inspect
+
+    from fastapi import BackgroundTasks
+    from fastapi.responses import StreamingResponse
+
+    from app.api import stems as stems_mod
+
+    job_id = "aabbccddee88"
+    job = Job(id=job_id)
+    job.status = "done"
+    _jobs[job_id] = job
+    path = _make_stem_file(job_id, "vocals", b"RIFF" + b"\x00" * 100_000)
+
+    try:
+        # Support both old signature (background_tasks kwarg) and the fixed one.
+        sig = inspect.signature(stems_mod.get_stem)
+        call_kwargs = {}
+        if "background_tasks" in sig.parameters:
+            call_kwargs["background_tasks"] = BackgroundTasks()
+
+        response = stems_mod.get_stem(job_id, "vocals", **call_kwargs)
+
+        assert isinstance(response, StreamingResponse), (
+            f"get_stem returned {type(response).__name__!r}, expected StreamingResponse. "
+            "FileResponse defers dec_readers to a BackgroundTask that never runs on "
+            "client disconnect — fix: use StreamingResponse with try/finally generator."
+        )
+
+        # Simulate a client disconnect by closing the async body iterator early.
+        # Starlette wraps the sync generator in an async generator via
+        # iterate_in_threadpool, which calls iterator.close() on GeneratorExit,
+        # propagating it into the sync generator's finally block.
+        gen = response.body_iterator
+        await gen.__anext__()  # start streaming (first chunk emitted)
+        await gen.aclose()     # disconnect → GeneratorExit → finally: dec_readers
+
+        assert _readers.get(job_id, 0) == 0, (
+            f"_readers[{job_id!r}] = {_readers.get(job_id, 0)} after simulated abort; "
+            "expected 0. dec_readers must live in the generator try/finally block, "
+            "not in a BackgroundTask."
+        )
+    finally:
+        _readers.pop(job_id, None)
+        path.unlink(missing_ok=True)
+        path.parent.rmdir()
+        path.parent.parent.rmdir()

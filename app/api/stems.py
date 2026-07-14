@@ -6,8 +6,8 @@ import subprocess
 import tempfile
 import zipfile
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response, StreamingResponse
 
 from app.core.config import JOB_ID_RE, JOBS_DIR, STEM_NAMES
 from app.core.registry import dec_readers, get as registry_get, inc_readers
@@ -50,7 +50,7 @@ def head_stem(job_id: str, name: str) -> Response:
 
 
 @router.get("/jobs/{job_id}/stems/{name}.wav")
-def get_stem(job_id: str, name: str, background_tasks: BackgroundTasks) -> FileResponse:
+def get_stem(job_id: str, name: str) -> StreamingResponse:
     if not JOB_ID_RE.match(job_id):
         raise HTTPException(status_code=404, detail="job not found")
     if not inc_readers(job_id):
@@ -60,11 +60,24 @@ def get_stem(job_id: str, name: str, background_tasks: BackgroundTasks) -> FileR
     except HTTPException:
         dec_readers(job_id)
         raise
-    background_tasks.add_task(dec_readers, job_id)
-    return FileResponse(
-        path,
+
+    size = path.stat().st_size
+
+    def generate():
+        try:
+            with open(path, "rb") as fh:
+                while chunk := fh.read(65536):
+                    yield chunk
+        finally:
+            dec_readers(job_id)
+
+    return StreamingResponse(
+        generate(),
         media_type="audio/wav",
-        headers={"Content-Disposition": f'inline; filename="{name}.wav"'},
+        headers={
+            "content-length": str(size),
+            "content-disposition": f'inline; filename="{name}.wav"',
+        },
     )
 
 
