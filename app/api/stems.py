@@ -68,11 +68,13 @@ def get_stem(job_id: str, name: str) -> StreamingResponse:
         raise HTTPException(status_code=404, detail="job not found")
     try:
         path = _resolve_stem_path(job_id, name)
+        try:
+            size = path.stat().st_size
+        except OSError:
+            raise HTTPException(status_code=404, detail="stem not found")
     except HTTPException:
         dec_readers(job_id)
         raise
-
-    size = path.stat().st_size
 
     def generate():
         try:

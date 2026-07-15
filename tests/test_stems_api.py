@@ -810,3 +810,60 @@ async def test_get_stem_dec_readers_on_aborted_download():
         path.unlink(missing_ok=True)
         path.parent.rmdir()
         path.parent.parent.rmdir()
+
+
+# ---------------------------------------------------------------------------
+# Reader-count leak when path.stat() raises after inc_readers succeeds
+# ---------------------------------------------------------------------------
+
+
+def test_get_stem_dec_readers_when_stat_raises(client, monkeypatch):
+    """get_stem must not leak reader count when path.stat() raises OSError.
+
+    Bug: size = path.stat().st_size lies outside the try/except that calls
+    dec_readers on HTTPException.  If stat() raises (e.g. transient network
+    file error or concurrent deletion), inc_readers is never balanced by
+    dec_readers — _readers[job_id] stays > 0 permanently, claim_for_sweep
+    always returns False, and sweep_old_jobs can never delete the job directory.
+    Fix: wrap path.stat() so that any OSError also calls dec_readers before raising.
+    """
+    import pathlib
+
+    from app.api import stems as stems_mod
+
+    job_id = "aabbccddeedd"
+    job = Job(id=job_id)
+    job.status = "done"
+    _jobs[job_id] = job
+    path = _make_stem_file(job_id, "vocals", b"RIFF" + b"\x00" * 44)
+
+    # Bypass _resolve_stem_path so its internal path.is_file() → stat() call
+    # does not interfere with our patch.  Only the explicit path.stat().st_size
+    # on line ~75 of get_stem will hit the patched version.
+    monkeypatch.setattr(stems_mod, "_resolve_stem_path", lambda jid, name: path)
+
+    _orig_stat = pathlib.Path.stat
+
+    def _stat_raises(self, *args, **kwargs):
+        if self == path:
+            raise OSError("simulated transient stat failure")
+        return _orig_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "stat", _stat_raises)
+
+    try:
+        r = client.get(f"/api/jobs/{job_id}/stems/vocals.wav")
+        assert r.status_code == 404, (
+            f"Expected 404 when path.stat() raises OSError, got {r.status_code}. "
+            "The server should return 404 (stem not found), not 500."
+        )
+        assert _readers.get(job_id, 0) == 0, (
+            f"_readers[{job_id!r}] = {_readers.get(job_id, 0)} after stat() failure; "
+            "expected 0. inc_readers was not balanced by dec_readers — reader count "
+            "leaks and claim_for_sweep will never be able to delete the job directory."
+        )
+    finally:
+        _readers.pop(job_id, None)
+        path.unlink(missing_ok=True)
+        path.parent.rmdir()
+        path.parent.parent.rmdir()
