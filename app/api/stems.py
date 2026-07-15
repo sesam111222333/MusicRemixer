@@ -273,7 +273,11 @@ def download_remix(
     # Write to a temp file so ffmpeg can seek back and fill in the WAV RIFF/data
     # chunk sizes correctly.  Writing to stdout ('-') gives a non-seekable pipe,
     # which forces ffmpeg to write the placeholder 0xFFFFFFFF for both sizes.
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+    try:
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+    except OSError as exc:
+        dec_readers(job_id)
+        raise HTTPException(status_code=500, detail=f"could not create temp file: {exc}")
     os.close(tmp_fd)
     cmd += ["-filter_complex", filter_complex, "-map", "[out]", "-f", "wav", tmp_path]
 

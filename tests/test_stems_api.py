@@ -867,3 +867,42 @@ def test_get_stem_dec_readers_when_stat_raises(client, monkeypatch):
         path.unlink(missing_ok=True)
         path.parent.rmdir()
         path.parent.parent.rmdir()
+
+
+# ---------------------------------------------------------------------------
+# Reader-count leak when mkstemp fails after inc_readers
+# ---------------------------------------------------------------------------
+
+
+def test_download_remix_dec_readers_when_mkstemp_fails(client, monkeypatch):
+    """download_remix must not leak reader count when mkstemp raises OSError.
+
+    Bug: inc_readers is called before tempfile.mkstemp, but mkstemp is outside
+    the try block, so if it raises (e.g. full disk, no temp inodes) dec_readers
+    is never called — _readers[job_id] stays > 0 permanently and sweep_old_jobs
+    can never delete the job directory, which worsens a full-disk situation.
+    Fix: wrap mkstemp inside the try so OSError triggers dec_readers.
+    """
+    import tempfile as tempfile_module
+
+    job_id = "aabbccddeef3"
+    job = Job(id=job_id, title="Mkstemp Fail Test")
+    job.status = "done"
+    _jobs[job_id] = job
+    paths = [_make_stem_file(job_id, "vocals", b"RIFF\x00\x00\x00\x00WAVE")]
+
+    def _mkstemp_raises(*args, **kwargs):
+        raise OSError("simulated: no space left on device")
+
+    monkeypatch.setattr(tempfile_module, "mkstemp", _mkstemp_raises)
+
+    try:
+        r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
+        assert r.status_code == 500
+        assert _readers.get(job_id, 0) == 0, (
+            f"_readers[{job_id!r}] = {_readers.get(job_id, 0)} after mkstemp failure; "
+            "expected 0. inc_readers must be balanced by dec_readers even when mkstemp raises."
+        )
+    finally:
+        _readers.pop(job_id, None)
+        _cleanup(paths)
