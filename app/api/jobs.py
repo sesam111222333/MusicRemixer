@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from app.core.config import DEFAULT_BACKEND, JOBS_DIR, MAX_PENDING_JOBS, MAX_UPLOAD_BYTES, STEMS_4, STEMS_6
 from app.core.models import Job
 from app.core.registry import all_jobs as registry_all_jobs
+from app.core.registry import claim_for_sweep, release_sweep_claim
 from app.core.registry import get as registry_get
 from app.core.registry import get_proc as registry_get_proc
 from app.core.registry import register as registry_register
@@ -148,8 +149,13 @@ def delete_job(job_id: str) -> dict[str, str]:
         raise HTTPException(status_code=404, detail="job not found")
     if job.status not in ("done", "error", "cancelled"):
         raise HTTPException(status_code=409, detail="job is still running")
-    job_dir = JOBS_DIR / job_id
-    if job_dir.is_dir():
-        shutil.rmtree(job_dir, ignore_errors=True)
-    registry_remove(job_id)
+    if not claim_for_sweep(job_id):
+        raise HTTPException(status_code=409, detail="job is being downloaded")
+    try:
+        job_dir = JOBS_DIR / job_id
+        if job_dir.is_dir():
+            shutil.rmtree(job_dir, ignore_errors=True)
+        registry_remove(job_id)
+    finally:
+        release_sweep_claim(job_id)
     return {"job_id": job_id, "status": "deleted"}

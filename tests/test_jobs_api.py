@@ -5,15 +5,19 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.registry import _jobs
+from app.core.registry import _jobs, _readers, _sweeping
 
 
 @pytest.fixture(autouse=True)
 def _isolate_registry():
     """Each test gets a fresh in-memory registry."""
     _jobs.clear()
+    _readers.clear()
+    _sweeping.clear()
     yield
     _jobs.clear()
+    _readers.clear()
+    _sweeping.clear()
 
 
 @pytest.fixture
@@ -185,3 +189,28 @@ def test_upload_client_disconnect_cleans_up(tmp_path):
 
     assert not _jobs, "job must be removed from registry on ClientDisconnect"
     assert not any(tmp_path.iterdir()), "job_dir must be deleted on ClientDisconnect"
+
+
+def test_delete_blocked_by_active_reader(client):
+    """DELETE /api/jobs/{id} must return 409 when a file download is in progress.
+
+    Without claim_for_sweep in delete_job, shutil.rmtree races with an active reader,
+    deleting stem files mid-stream and causing FileNotFoundError / HTTP 500.
+    """
+    from app.core.registry import dec_readers, inc_readers
+
+    r = client.post("/api/jobs", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
+    job_id = r.json()["job_id"]
+    _jobs[job_id].status = "done"
+
+    inc_readers(job_id)
+    try:
+        r = client.delete(f"/api/jobs/{job_id}")
+    finally:
+        dec_readers(job_id)
+
+    assert r.status_code == 409, (
+        f"DELETE must return 409 while a reader is active; got {r.status_code}. "
+        "Without claim_for_sweep, rmtree races with ongoing file streaming."
+    )
+    assert job_id in _jobs, "job must remain in registry while a reader is active"
