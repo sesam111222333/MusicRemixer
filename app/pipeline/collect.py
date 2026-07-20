@@ -191,8 +191,12 @@ def sweep_old_jobs(jobs_dir: Path) -> None:
                 continue  # never delete an active job's working dir
             if job.created_at >= cutoff:
                 continue
-        elif d.stat().st_mtime >= cutoff:
-            continue
+        else:
+            try:
+                if d.stat().st_mtime >= cutoff:
+                    continue
+            except FileNotFoundError:
+                continue  # already deleted by a concurrent sweep
         if not claim_for_sweep(d.name):
             continue  # stem files are actively being streamed; defer deletion
         try:

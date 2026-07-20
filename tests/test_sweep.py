@@ -135,6 +135,38 @@ def test_restored_job_swept_after_ttl(tmp_path: Path):
     assert "oldrestorejob" not in _jobs
 
 
+def test_orphan_stat_filenotfound_silenced(tmp_path: Path):
+    """FileNotFoundError from d.stat() in the orphan branch must not propagate.
+
+    Regression for the concurrent-sweep race: two sweep threads can iterate
+    the same orphan directory. Thread A deletes it; Thread B has already passed
+    is_dir() (True) and then calls stat() on the now-deleted path, raising
+    FileNotFoundError. That error must be swallowed so the new job does not
+    spuriously transition to 'error'.
+    """
+    d = _mkdir(tmp_path, "orphan_ghost_race")
+    # No registry entry -> orphan elif branch in sweep_old_jobs
+
+    real_stat = type(d).stat
+    stat_call_counts: dict[str, int] = {}
+
+    def counting_stat(self, **kwargs):
+        key = str(self)
+        n = stat_call_counts.get(key, 0) + 1
+        stat_call_counts[key] = n
+        # is_dir() calls stat() first (n==1); the explicit elif d.stat() is n==2.
+        # Raise on the second call to simulate the concurrent deletion race.
+        if self == d and n >= 2:
+            raise FileNotFoundError(
+                f"[Errno 2] simulated concurrent deletion: {self}"
+            )
+        return real_stat(self, **kwargs)
+
+    with patch.object(type(d), "stat", counting_stat):
+        with patch("app.pipeline.collect.JOB_TTL_SECONDS", 60):
+            sweep_old_jobs(tmp_path)  # must not raise FileNotFoundError
+
+
 def test_skip_terminal_job_with_active_readers(tmp_path: Path):
     """sweep_old_jobs must not delete a terminal, expired job directory while
     it has active HTTP readers (e.g. a stem is currently being streamed)."""
