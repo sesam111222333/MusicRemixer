@@ -191,6 +191,22 @@ def test_upload_client_disconnect_cleans_up(tmp_path):
     assert not any(tmp_path.iterdir()), "job_dir must be deleted on ClientDisconnect"
 
 
+def test_create_task_result_is_strongly_referenced():
+    """asyncio.create_task only holds a weak ref; without storing the result,
+    CPython can GC a task mid-run, silently aborting the pipeline.
+
+    The module must define _background_tasks and add each spawned task to it,
+    removing it only via a done-callback when the task completes.
+    """
+    import app.api.jobs as m
+
+    assert hasattr(m, "_background_tasks"), (
+        "app.api.jobs must define _background_tasks — asyncio only holds weak "
+        "refs to tasks, so without a strong ref the task can be GC'd mid-run"
+    )
+    assert isinstance(m._background_tasks, set)
+
+
 def test_delete_blocked_by_active_reader(client):
     """DELETE /api/jobs/{id} must return 409 when a file download is in progress.
 

@@ -23,6 +23,10 @@ from app.pipeline.runner import run_pipeline_from_file
 
 router = APIRouter(tags=["jobs"])
 
+# Strong references to background tasks — asyncio only holds weak refs, so without
+# this set CPython can GC a task before it finishes.
+_background_tasks: set[asyncio.Task] = set()
+
 _ALLOWED_EXTS = frozenset(
     (".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".opus", ".webm", ".wma")
 )
@@ -62,7 +66,9 @@ async def create_job(payload: JobRequest) -> dict[str, str]:
     if not selected:
         selected = list(stem_names)
     job = registry_register(Job(id=uuid.uuid4().hex[:12], backend=backend, selected_stems=selected))
-    asyncio.create_task(run_pipeline(job, url, JOBS_DIR))
+    _t = asyncio.create_task(run_pipeline(job, url, JOBS_DIR))
+    _background_tasks.add(_t)
+    _t.add_done_callback(_background_tasks.discard)
     return {"job_id": job.id}
 
 
@@ -116,7 +122,9 @@ async def create_job_from_upload(
         registry_remove(job.id)
         raise HTTPException(status_code=413, detail="Upload exceeds maximum allowed size")
 
-    asyncio.create_task(run_pipeline_from_file(job, source_path, JOBS_DIR))
+    _t = asyncio.create_task(run_pipeline_from_file(job, source_path, JOBS_DIR))
+    _background_tasks.add(_t)
+    _t.add_done_callback(_background_tasks.discard)
     return {"job_id": job.id}
 
 
