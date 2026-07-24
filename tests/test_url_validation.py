@@ -50,6 +50,20 @@ from app.pipeline.download import InvalidYouTubeURL, validate_youtube_url
             "https://music.youtube.com/playlist?list=RDdQw4w9WgXcQ",
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         ),
+        # Shorts URLs
+        (
+            "https://www.youtube.com/shorts/dQw4w9WgXcQ",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        ),
+        (
+            "https://m.youtube.com/shorts/dQw4w9WgXcQ",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        ),
+        # Embed URLs
+        (
+            "https://www.youtube.com/embed/dQw4w9WgXcQ",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        ),
     ],
 )
 def test_accepts_youtube_urls(url: str, expected: str) -> None:

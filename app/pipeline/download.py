@@ -90,6 +90,14 @@ def normalize_youtube_url(url: str) -> str:
                     return f"https://www.youtube.com/watch?v={candidate}"
                 break
 
+    if host == "youtube.com":
+        path_parts = parsed.path.split("/")
+        # /shorts/<id> and /embed/<id>
+        if len(path_parts) >= 3 and path_parts[1] in ("shorts", "embed"):
+            candidate = path_parts[2]
+            if _VIDEO_ID_RE.match(candidate):
+                return f"https://www.youtube.com/watch?v={candidate}"
+
     if host == "youtu.be":
         vid = parsed.path.lstrip("/")
         if _VIDEO_ID_RE.match(vid):
