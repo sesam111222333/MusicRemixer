@@ -64,6 +64,17 @@ from app.pipeline.download import InvalidYouTubeURL, validate_youtube_url
             "https://www.youtube.com/embed/dQw4w9WgXcQ",
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         ),
+        # Path-based video ID must win over RD-list seed when both are present.
+        # youtu.be/<realId>?list=RD<seedId> — realId is in the path, seedId in list.
+        (
+            "https://youtu.be/dQw4w9WgXcQ?list=RDoHg5SJYRHA0",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        ),
+        # /shorts/<realId>?list=RD<seedId>
+        (
+            "https://www.youtube.com/shorts/dQw4w9WgXcQ?list=RDoHg5SJYRHA0",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        ),
     ],
 )
 def test_accepts_youtube_urls(url: str, expected: str) -> None:

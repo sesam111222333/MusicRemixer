@@ -82,14 +82,6 @@ def normalize_youtube_url(url: str) -> str:
     if (vid := (qs.get("v") or [None])[0]) and _VIDEO_ID_RE.match(vid):
         return f"https://www.youtube.com/watch?v={vid}"
 
-    if (lst := (qs.get("list") or [None])[0]) and lst.startswith("RD"):
-        for prefix in _RD_PREFIXES:
-            if lst.startswith(prefix):
-                candidate = lst[len(prefix) : len(prefix) + 11]
-                if _VIDEO_ID_RE.match(candidate):
-                    return f"https://www.youtube.com/watch?v={candidate}"
-                break
-
     if host == "youtube.com":
         path_parts = parsed.path.split("/")
         # /shorts/<id> and /embed/<id>
@@ -102,6 +94,14 @@ def normalize_youtube_url(url: str) -> str:
         vid = parsed.path.lstrip("/")
         if _VIDEO_ID_RE.match(vid):
             return f"https://www.youtube.com/watch?v={vid}"
+
+    if (lst := (qs.get("list") or [None])[0]) and lst.startswith("RD"):
+        for prefix in _RD_PREFIXES:
+            if lst.startswith(prefix):
+                candidate = lst[len(prefix) : len(prefix) + 11]
+                if _VIDEO_ID_RE.match(candidate):
+                    return f"https://www.youtube.com/watch?v={candidate}"
+                break
 
     return url
 
