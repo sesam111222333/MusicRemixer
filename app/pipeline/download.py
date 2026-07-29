@@ -12,6 +12,9 @@ from app.core.models import Job, JobCancelled
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 # Longest-first so "RDAMVM" is matched before the plain "RD" prefix.
 _RD_PREFIXES = ("RDAMVM", "RDCLAK", "RDQM", "RDEM", "RD")
+# Only these prefixes actually embed an 11-char video ID directly after the prefix.
+# RDCLAK/RDEM/RDQM are opaque algorithmic playlist IDs with no extractable seed.
+_RD_SEED_PREFIXES = frozenset({"RDAMVM", "RD"})
 _ALLOWED_HOSTS = frozenset(
     (
         "youtube.com",
@@ -98,9 +101,10 @@ def normalize_youtube_url(url: str) -> str:
     if (lst := (qs.get("list") or [None])[0]) and lst.startswith("RD"):
         for prefix in _RD_PREFIXES:
             if lst.startswith(prefix):
-                candidate = lst[len(prefix) : len(prefix) + 11]
-                if _VIDEO_ID_RE.match(candidate):
-                    return f"https://www.youtube.com/watch?v={candidate}"
+                if prefix in _RD_SEED_PREFIXES:
+                    candidate = lst[len(prefix) : len(prefix) + 11]
+                    if _VIDEO_ID_RE.match(candidate):
+                        return f"https://www.youtube.com/watch?v={candidate}"
                 break
 
     return url
