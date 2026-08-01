@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from app.pipeline.download import InvalidYouTubeURL, validate_youtube_url
@@ -94,3 +96,21 @@ def test_rejects_bad_urls(url: str, reason_substring: str) -> None:
     with pytest.raises(InvalidYouTubeURL) as exc:
         validate_youtube_url(url)
     assert reason_substring in str(exc.value)
+
+
+def test_validate_youtube_url_hostname_valueerror_is_wrapped() -> None:
+    """Regression: parsed.hostname is read outside the urlparse try block.
+    If .hostname raises ValueError (e.g. malformed bracketed IPv6), it must
+    be caught and re-raised as InvalidYouTubeURL, not escape as a bare ValueError
+    that bypasses the create_job handler and causes HTTP 500."""
+
+    class _BadResult:
+        scheme = "https"
+
+        @property
+        def hostname(self) -> str:
+            raise ValueError("Invalid IPv6 URL")
+
+    with patch("urllib.parse.urlparse", return_value=_BadResult()):
+        with pytest.raises(InvalidYouTubeURL):
+            validate_youtube_url("https://[::1")

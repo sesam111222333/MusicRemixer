@@ -44,7 +44,10 @@ def validate_youtube_url(url: str) -> str:
         raise InvalidYouTubeURL(f"could not parse URL: {e}") from e
     if parsed.scheme not in ("http", "https"):
         raise InvalidYouTubeURL("URL must use http or https")
-    host = (parsed.hostname or "").lower()
+    try:
+        host = (parsed.hostname or "").lower()
+    except ValueError as e:
+        raise InvalidYouTubeURL(f"could not parse URL: {e}") from e
     if host not in _ALLOWED_HOSTS:
         raise InvalidYouTubeURL(f"unsupported host: {host or '(empty)'}")
 
