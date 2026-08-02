@@ -106,6 +106,29 @@ def test_validate_audio_rejects_duration_exceeding_limit(monkeypatch, tmp_path):
         _validate_audio(audio_file)
 
 
+def test_validate_audio_rejects_na_duration(monkeypatch, tmp_path):
+    """_validate_audio must raise ValueError when ffprobe reports duration as 'N/A'.
+    Such non-numeric strings are truthy and bypass the None-check but break float(),
+    so the error must be caught and converted to the 'unknown' message."""
+    fake_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stdout=json.dumps({
+            "streams": [{"codec_type": "audio", "duration": "N/A"}],
+            "format": {"duration": "N/A"},
+        }).encode(),
+        stderr=b"",
+    )
+
+    monkeypatch.setattr("app.pipeline.runner.subprocess.run", lambda *a, **kw: fake_result)
+
+    audio_file = tmp_path / "audio.mp3"
+    audio_file.write_bytes(b"fake")
+
+    with pytest.raises(ValueError, match="unknown"):
+        _validate_audio(audio_file)
+
+
 def test_validate_audio_rejects_unknown_duration(monkeypatch, tmp_path):
     """_validate_audio must raise ValueError when ffprobe reports no duration.
     Containers like ADTS/.aac or certain .ogg/.opus/.wma omit duration from both

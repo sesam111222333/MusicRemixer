@@ -150,7 +150,10 @@ def _validate_audio(source: Path) -> float:
         raise ValueError("Uploaded file is not a valid audio file")
     if dur_str is None:
         raise ValueError("Audio duration is unknown -- cannot verify duration limit")
-    dur = float(dur_str)
+    try:
+        dur = float(dur_str)
+    except (ValueError, TypeError):
+        raise ValueError("Audio duration is unknown -- cannot verify duration limit")
     if dur > MAX_DURATION_SEC:
         mins = MAX_DURATION_SEC // 60
         raise ValueError(f"Duration {int(dur // 60)} min exceeds limit of {mins} min")
