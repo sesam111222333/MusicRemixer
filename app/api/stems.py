@@ -6,7 +6,9 @@ import subprocess
 import tempfile
 import zipfile
 
-from fastapi import APIRouter, HTTPException, Query
+from typing import Annotated
+
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 
 from app.core.config import JOB_ID_RE, JOBS_DIR, STEM_NAMES
@@ -60,8 +62,33 @@ def head_stem(job_id: str, name: str) -> Response:
         dec_readers(job_id)
 
 
+def _parse_range(range_header: str, total: int) -> tuple[int, int] | None:
+    """Parse a Range header; return (start, end) inclusive, or None if unsatisfiable."""
+    if not range_header.startswith("bytes="):
+        return None
+    spec = range_header[6:]
+    try:
+        if spec.startswith("-"):
+            suffix = int(spec[1:])
+            start, end = max(0, total - suffix), total - 1
+        elif spec.endswith("-"):
+            start, end = int(spec[:-1]), total - 1
+        else:
+            s, e = spec.split("-", 1)
+            start, end = int(s), int(e)
+    except ValueError:
+        return None
+    if start > end or start >= total:
+        return None
+    return start, min(end, total - 1)
+
+
 @router.get("/jobs/{job_id}/stems/{name}.wav")
-def get_stem(job_id: str, name: str) -> StreamingResponse:
+def get_stem(
+    job_id: str,
+    name: str,
+    range: Annotated[str | None, Header()] = None,
+) -> StreamingResponse:
     if not JOB_ID_RE.match(job_id):
         raise HTTPException(status_code=404, detail="job not found")
     if not inc_readers(job_id):
@@ -76,6 +103,38 @@ def get_stem(job_id: str, name: str) -> StreamingResponse:
         dec_readers(job_id)
         raise
 
+    parsed = _parse_range(range, size) if range else None
+
+    if parsed is not None:
+        start, end = parsed
+        length = end - start + 1
+
+        def generate_range():
+            try:
+                with open(path, "rb") as fh:
+                    fh.seek(start)
+                    remaining = length
+                    while remaining > 0:
+                        chunk = fh.read(min(65536, remaining))
+                        if not chunk:
+                            break
+                        yield chunk
+                        remaining -= len(chunk)
+            finally:
+                dec_readers(job_id)
+
+        return StreamingResponse(
+            generate_range(),
+            status_code=206,
+            media_type="audio/wav",
+            headers={
+                "content-length": str(length),
+                "content-range": f"bytes {start}-{end}/{size}",
+                "accept-ranges": "bytes",
+                "content-disposition": f'inline; filename="{name}.wav"',
+            },
+        )
+
     def generate():
         try:
             with open(path, "rb") as fh:
@@ -89,6 +148,7 @@ def get_stem(job_id: str, name: str) -> StreamingResponse:
         media_type="audio/wav",
         headers={
             "content-length": str(size),
+            "accept-ranges": "bytes",
             "content-disposition": f'inline; filename="{name}.wav"',
         },
     )

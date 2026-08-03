@@ -906,3 +906,90 @@ def test_download_remix_dec_readers_when_mkstemp_fails(client, monkeypatch):
     finally:
         _readers.pop(job_id, None)
         _cleanup(paths)
+
+
+# ---------------------------------------------------------------------------
+# HTTP Range support in get_stem (RFC 7233)
+# ---------------------------------------------------------------------------
+
+
+def test_get_stem_range_returns_206_with_slice(client):
+    """GET with Range: bytes=X-Y must return 206 with only the requested bytes.
+
+    head_stem advertises accept-ranges: bytes, so browsers (and Safari in
+    particular) send Range requests for media seeking.  get_stem must honour
+    the Range header; returning 200 with the full file on a Range request
+    breaks seeking and causes Safari to refuse playback entirely.
+    """
+    job_id = "aabbccddeefa"
+    job = Job(id=job_id)
+    job.status = "done"
+    _jobs[job_id] = job
+    payload = b"RIFF12345678"  # 12 bytes, easy to slice by hand
+    path = _make_stem_file(job_id, "vocals", payload)
+    try:
+        r = client.get(
+            f"/api/jobs/{job_id}/stems/vocals.wav",
+            headers={"Range": "bytes=4-7"},
+        )
+        assert r.status_code == 206, (
+            f"Expected 206 Partial Content for Range request, got {r.status_code}. "
+            "get_stem ignores the Range header and returns 200 with the full file."
+        )
+        assert r.content == b"1234", (
+            f"Expected bytes 4-7 = b'1234', got {r.content!r}"
+        )
+        assert "content-range" in r.headers, "206 response must include Content-Range"
+        assert r.headers["content-range"] == f"bytes 4-7/{len(payload)}", (
+            f"Wrong Content-Range: {r.headers.get('content-range')!r}"
+        )
+        assert r.headers.get("content-length") == "4", (
+            f"Wrong Content-Length for partial response: {r.headers.get('content-length')!r}"
+        )
+    finally:
+        _readers.pop(job_id, None)
+        path.unlink(missing_ok=True)
+        path.parent.rmdir()
+        path.parent.parent.rmdir()
+
+
+def test_get_stem_range_open_end_returns_rest_of_file(client):
+    """Range: bytes=N- must return from byte N to end of file with 206."""
+    job_id = "aabbccddeefb"
+    job = Job(id=job_id)
+    job.status = "done"
+    _jobs[job_id] = job
+    payload = b"RIFF12345678"
+    path = _make_stem_file(job_id, "vocals", payload)
+    try:
+        r = client.get(
+            f"/api/jobs/{job_id}/stems/vocals.wav",
+            headers={"Range": "bytes=8-"},
+        )
+        assert r.status_code == 206
+        assert r.content == b"5678"
+        assert r.headers["content-range"] == f"bytes 8-11/{len(payload)}"
+    finally:
+        _readers.pop(job_id, None)
+        path.unlink(missing_ok=True)
+        path.parent.rmdir()
+        path.parent.parent.rmdir()
+
+
+def test_get_stem_no_range_still_returns_200(client):
+    """A request without Range must still return 200 with full content."""
+    job_id = "aabbccddeef9"
+    job = Job(id=job_id)
+    job.status = "done"
+    _jobs[job_id] = job
+    payload = b"RIFF12345678"
+    path = _make_stem_file(job_id, "vocals", payload)
+    try:
+        r = client.get(f"/api/jobs/{job_id}/stems/vocals.wav")
+        assert r.status_code == 200
+        assert r.content == payload
+    finally:
+        _readers.pop(job_id, None)
+        path.unlink(missing_ok=True)
+        path.parent.rmdir()
+        path.parent.parent.rmdir()
