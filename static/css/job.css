@@ -1,7 +1,6 @@
 /* ───────────── Job progress ───────────── */
 
 .job {
-  display: none !important;
   background: var(--panel);
   border: var(--border-w) solid var(--line);
   border-radius: var(--radius);

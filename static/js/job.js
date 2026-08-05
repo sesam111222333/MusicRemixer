@@ -353,7 +353,7 @@ export function wireJobForm() {
     }
     setCurrentJobId(jobId);
 
-    jobBox.classList.add("hidden");
+    jobBox.classList.remove("hidden");
     jobCancelBtn.classList.add("hidden");
     startPhraseRotation("queued");
     lastStatus = "queued";
