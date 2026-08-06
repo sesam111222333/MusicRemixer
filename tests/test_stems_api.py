@@ -283,6 +283,29 @@ def _fake_popen(fake_wav: bytes):
     return _FakePopen
 
 
+def _fake_popen_write_file(fake_wav: bytes):
+    """Return a fake Popen class that writes *fake_wav* to cmd[-1] (temp output path)
+    and supports communicate(timeout=...) — matches the Popen+set_proc pattern."""
+
+    class _FakePopen:
+        def __init__(self, cmd, **kwargs):
+            with open(cmd[-1], "wb") as fh:
+                fh.write(fake_wav)
+            self.returncode = 0
+            self._stderr = b""
+
+        def communicate(self, timeout=None):
+            return b"", self._stderr
+
+        def kill(self):
+            pass
+
+        def wait(self):
+            return 0
+
+    return _FakePopen
+
+
 def _fake_run(valid_wav: bytes):
     """Return a fake subprocess.run that writes *valid_wav* to the output file path (cmd[-1])."""
 
@@ -304,12 +327,14 @@ def _fake_run(valid_wav: bytes):
 
 
 def test_download_remix_uses_tempfile_not_pipe(client, monkeypatch):
-    """download_remix must write ffmpeg output to a seekable temp file, not stdout ('-').
+    """download_remix must write ffmpeg output to a seekable temp file, not stdout pipe.
 
-    Writing '-' (stdout) to ffmpeg produces a non-seekable pipe; ffmpeg cannot
-    seek back to fill in the RIFF/data chunk sizes and writes 0xFFFFFFFF instead.
-    subprocess.run with a real file path gives ffmpeg a seekable fd so it writes
-    the correct header sizes."""
+    When ffmpeg writes WAV to a non-seekable stdout pipe it cannot seek back to
+    fill in the RIFF/data chunk sizes and writes 0xFFFFFFFF instead.  The correct
+    fix is to pass the temp file path as the output argument in cmd so ffmpeg
+    has a seekable fd.  Using Popen with stdout=PIPE reproduces the old bug even
+    with a temp-file path — stdout must be DEVNULL (or None) so the output file
+    argument in cmd is the only place ffmpeg writes."""
     import subprocess
 
     job_id = "aabbccddeef0"
@@ -320,25 +345,25 @@ def test_download_remix_uses_tempfile_not_pipe(client, monkeypatch):
     fake_wav = b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32
     paths = [_make_stem_file(job_id, "vocals", b"RIFF\x00\x00\x00\x00WAVE")]
 
-    popen_called: list[bool] = []
+    stdout_kwargs: list = []
 
-    def spy_popen(*args, **kwargs):
-        popen_called.append(True)
-        return _fake_popen(fake_wav)(*args, **kwargs)
+    def spy_popen(cmd, **kwargs):
+        stdout_kwargs.append(kwargs.get("stdout"))
+        return _fake_popen_write_file(fake_wav)(cmd, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", spy_popen)
-    monkeypatch.setattr(subprocess, "run", _fake_run(fake_wav))
 
     try:
         r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
-        assert not popen_called, (
-            "subprocess.Popen must not be called — download_remix must use "
-            "subprocess.run with a temp file path so ffmpeg can seek back and "
-            "write correct WAV RIFF/data chunk sizes (Popen with stdout=PIPE gives "
-            "a non-seekable fd → 0xFFFFFFFF placeholder sizes)."
-        )
         assert r.status_code == 200
         assert r.headers["content-type"] == "audio/wav"
+        assert stdout_kwargs, "subprocess.Popen was never called"
+        for stdout in stdout_kwargs:
+            assert stdout != subprocess.PIPE, (
+                "download_remix passes stdout=PIPE to Popen — ffmpeg cannot seek "
+                "back and writes 0xFFFFFFFF placeholder sizes in the WAV header. "
+                "Use stdout=DEVNULL and write output to the temp file path in cmd."
+            )
     finally:
         _cleanup(paths)
 
@@ -355,7 +380,7 @@ def test_remix_content_disposition_sanitizes_double_quotes(client, monkeypatch):
 
     fake_wav = b"RIFF\x00\x00\x00\x00WAVE"
 
-    monkeypatch.setattr(subprocess, "run", _fake_run(fake_wav))
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen_write_file(fake_wav))
 
     try:
         r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
@@ -402,7 +427,7 @@ def test_remix_content_disposition_handles_non_latin1_title(client, monkeypatch)
 
     fake_wav = b"RIFF\x00\x00\x00\x00WAVE"
 
-    monkeypatch.setattr(subprocess, "run", _fake_run(fake_wav))
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen_write_file(fake_wav))
 
     try:
         r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
@@ -446,7 +471,7 @@ def test_download_remix_tempfile_deleted_after_streaming(client, monkeypatch):
         return fd, path
 
     monkeypatch.setattr(tempfile_module, "mkstemp", spy_mkstemp)
-    monkeypatch.setattr(subprocess, "run", _fake_run(b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32))
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen_write_file(b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32))
 
     try:
         r = client.get(
@@ -497,26 +522,31 @@ def test_remix_empty_volume_slot_uses_default_not_shifts(client, monkeypatch):
 
     captured_cmd: list[list[str]] = []
 
-    def spy_run(cmd, **kwargs):
-        captured_cmd.append(list(cmd))
+    class _SpyPopen:
+        def __init__(self, cmd, **kwargs):
+            captured_cmd.append(list(cmd))
+            with open(cmd[-1], "wb") as fh:
+                fh.write(b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32)
+            self.returncode = 0
+            self._stderr = b""
 
-        class _R:
-            returncode = 0
-            stderr = b""
+        def communicate(self, timeout=None):
+            return b"", self._stderr
 
-        out_path = cmd[-1]
-        with open(out_path, "wb") as fh:
-            fh.write(b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32)
-        return _R()
+        def kill(self):
+            pass
 
-    monkeypatch.setattr(subprocess, "run", spy_run)
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", _SpyPopen)
 
     try:
         r = client.get(
             f"/api/jobs/{job_id}/remix.wav?stems=vocals,drums,bass&volumes=0.5,,0.8&pitches=,,3"
         )
         assert r.status_code == 200
-        assert captured_cmd, "subprocess.run was never called"
+        assert captured_cmd, "subprocess.Popen was never called"
 
         cmd = captured_cmd[0]
         # Find the -filter_complex argument
@@ -559,7 +589,6 @@ def test_remix_wav_header_sizes_are_valid(client, monkeypatch):
     Windows Media Player) interpret this as ~48 695 seconds of audio even for a 2-second
     mix, and seek is broken.  The fix must write to a seekable temp file instead.
     """
-    import io
     import struct
     import subprocess
 
@@ -583,35 +612,20 @@ def test_remix_wav_header_sizes_are_valid(client, monkeypatch):
         + b"data" + struct.pack("<I", _data_size)
     )
 
-    # Simulate what ffmpeg produces when writing WAV to a non-seekable pipe:
-    # both sizes are the placeholder 0xFFFFFFFF because ffmpeg cannot seek back.
-    _PIPE_WAV = bytearray(_VALID_WAV)
-    _PIPE_WAV[4:8] = b"\xff\xff\xff\xff"   # RIFF chunk size — placeholder
-    _PIPE_WAV[40:44] = b"\xff\xff\xff\xff"  # data chunk size — placeholder
-    _PIPE_WAV = bytes(_PIPE_WAV)
-
     def fake_popen(cmd, **kwargs):
-        # Old (buggy) path: ffmpeg writes WAV to stdout pipe → 0xFFFFFFFF sizes.
+        # download_remix uses Popen with stdout=DEVNULL and writes output to cmd[-1].
+        # A seekable file lets ffmpeg fill in the correct RIFF/data chunk sizes.
+        out_path = cmd[-1]
+        with open(out_path, "wb") as fh:
+            fh.write(_VALID_WAV)
         class _P:
-            stdout = io.BytesIO(_PIPE_WAV)
-            stderr = io.BytesIO(b"")
             returncode = 0
+            def communicate(self, timeout=None): return b"", b""
             def kill(self): pass
             def wait(self): return 0
         return _P()
 
-    def fake_run(cmd, **kwargs):
-        # Fixed path: ffmpeg writes to a seekable file → correct sizes.
-        out_path = cmd[-1]
-        with open(out_path, "wb") as fh:
-            fh.write(_VALID_WAV)
-        class _R:
-            returncode = 0
-            stderr = b""
-        return _R()
-
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(subprocess, "run", fake_run)
 
     try:
         r = client.get(
@@ -993,3 +1007,115 @@ def test_get_stem_no_range_still_returns_200(client):
         path.unlink(missing_ok=True)
         path.parent.rmdir()
         path.parent.parent.rmdir()
+
+
+# ---------------------------------------------------------------------------
+# download_remix — set_proc registration and timeout
+# ---------------------------------------------------------------------------
+
+
+def test_download_remix_registers_proc_with_set_proc(client, monkeypatch):
+    """download_remix must call set_proc during ffmpeg rendering so POST /cancel can abort it.
+
+    Without set_proc registration the cancel API has no handle to call
+    proc.terminate() on — a hung ffmpeg render cannot be interrupted from outside,
+    binds a thread-pool worker indefinitely, and holds inc_readers so
+    sweep_old_jobs and DELETE /jobs/{id} are blocked until the process exits.
+    """
+    import subprocess
+    from app.api import stems as stems_module
+
+    job_id = "aabbccddeec0"
+    job = Job(id=job_id, title="Proc Reg Test")
+    job.status = "done"
+    _jobs[job_id] = job
+    paths = [_make_stem_file(job_id, "vocals", b"RIFF\x00\x00\x00\x00WAVE")]
+
+    set_proc_calls: list[tuple] = []
+
+    def spy_set_proc(jid, proc):
+        set_proc_calls.append((jid, proc))
+
+    fake_wav = b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32
+    # Provide fakes for both APIs so the test works regardless of which is used.
+    monkeypatch.setattr(subprocess, "run", _fake_run(fake_wav))
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen_write_file(fake_wav))
+    # Patch set_proc in the stems module; raising=False so it works before
+    # the import is added (the attribute is missing → test fails at assertion).
+    monkeypatch.setattr(stems_module, "set_proc", spy_set_proc, raising=False)
+
+    try:
+        r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
+        assert r.status_code == 200
+        assert any(proc is not None for _, proc in set_proc_calls), (
+            "set_proc was never called with a non-None proc — "
+            "download_remix does not register the ffmpeg subprocess for cancellation."
+        )
+        assert any(proc is None for _, proc in set_proc_calls), (
+            "set_proc(job_id, None) was never called — "
+            "download_remix does not clear the proc registration after ffmpeg completes."
+        )
+    finally:
+        _cleanup(paths)
+
+
+def test_download_remix_ffmpeg_timeout_returns_500(client, monkeypatch):
+    """download_remix must return 500 (not hang) when ffmpeg times out.
+
+    Without a timeout on the ffmpeg call a stuck render blocks the thread-pool
+    worker and holds inc_readers indefinitely. With communicate(timeout=300),
+    TimeoutExpired must be caught and translated to an HTTP 500.
+    """
+    import subprocess
+
+    job_id = "aabbccddeec1"
+    job = Job(id=job_id)
+    job.status = "done"
+    _jobs[job_id] = job
+    paths = [_make_stem_file(job_id, "vocals", b"RIFF\x00\x00\x00\x00WAVE")]
+
+    fake_wav = b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32
+
+    class _TimeoutPopen:
+        def __init__(self, cmd, **kwargs):
+            self.returncode = -9
+            self._cmd = cmd
+            self._calls = 0
+
+        def communicate(self, timeout=None):
+            self._calls += 1
+            if self._calls == 1:
+                # First call (from communicate(timeout=300)) simulates a hang.
+                raise subprocess.TimeoutExpired(cmd=self._cmd, timeout=timeout)
+            # Second call (drain after kill) returns normally.
+            return b"", b""
+
+        def kill(self):
+            pass
+
+        def wait(self):
+            return -9
+
+    # Patch Popen to a process that always times out.
+    # subprocess.run is NOT patched — if the code still uses run (no timeout),
+    # it will try to invoke real ffmpeg on fake WAV files and return 500 from
+    # ffmpeg exit code, not from timeout handling. That masks the bug.
+    # We detect the fix by: Popen → TimeoutExpired → our handler → 500.
+    # Current code (uses run, no timeout): run is not patched → real ffmpeg
+    # fails on fake stems → 500 from ffmpeg error, not timeout → test would
+    # still pass! So we need a different signal.
+    # Solution: also patch subprocess.run to succeed (return 200); then:
+    #   - current code (no timeout, uses run): run succeeds → 200 → FAIL
+    #   - fixed code (uses Popen+timeout): Popen raises TimeoutExpired → 500 → PASS
+    monkeypatch.setattr(subprocess, "run", _fake_run(fake_wav))
+    monkeypatch.setattr(subprocess, "Popen", _TimeoutPopen)
+
+    try:
+        r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
+        assert r.status_code == 500, (
+            f"Expected 500 on ffmpeg timeout, got {r.status_code}. "
+            "download_remix must use communicate(timeout=300) so a hung ffmpeg "
+            "is killed and the request fails fast instead of blocking indefinitely."
+        )
+    finally:
+        _cleanup(paths)

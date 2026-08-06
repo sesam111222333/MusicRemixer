@@ -12,7 +12,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 
 from app.core.config import JOB_ID_RE, JOBS_DIR, STEM_NAMES
-from app.core.registry import dec_readers, get as registry_get, inc_readers
+from app.core.registry import dec_readers, get as registry_get, inc_readers, set_proc
 
 router = APIRouter(tags=["stems"])
 
@@ -342,19 +342,30 @@ def download_remix(
     cmd += ["-filter_complex", filter_complex, "-map", "[out]", "-f", "wav", tmp_path]
 
     try:
-        result = subprocess.run(cmd, stderr=subprocess.PIPE)
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     except OSError as exc:
         os.unlink(tmp_path)
         dec_readers(job_id)
         raise HTTPException(status_code=500, detail=f"ffmpeg unavailable: {exc}")
-
-    if result.returncode != 0:
-        os.unlink(tmp_path)
-        dec_readers(job_id)
-        raise HTTPException(
-            status_code=500,
-            detail=f"ffmpeg: {result.stderr.decode(errors='replace')}",
-        )
+    set_proc(job_id, proc)
+    try:
+        try:
+            _, stderr = proc.communicate(timeout=300)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            os.unlink(tmp_path)
+            dec_readers(job_id)
+            raise HTTPException(status_code=500, detail="ffmpeg timed out")
+        if proc.returncode != 0:
+            os.unlink(tmp_path)
+            dec_readers(job_id)
+            raise HTTPException(
+                status_code=500,
+                detail=f"ffmpeg: {stderr.decode(errors='replace')}",
+            )
+    finally:
+        set_proc(job_id, None)
 
     def generate():
         try:
