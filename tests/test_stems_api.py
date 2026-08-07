@@ -150,6 +150,44 @@ def test_zip_streams_valid_zip_with_correct_contents(client):
         _cleanup(paths)
 
 
+def test_zip_excludes_original_and_mix(client):
+    """download_all_stems must not include original.wav or mix.wav in the ZIP.
+
+    The pipeline writes original.wav (re-encoded source when a subset of stems is
+    selected) and mix.wav (amix of selected stems) into the stems directory, but
+    these are derived/combined tracks, not isolated demucs stems.  Including them
+    gives the user misleading audio and a larger-than-expected download.
+    """
+    import io
+    import zipfile
+
+    job_id = "aabbccddeef4"
+    stems = {
+        "vocals": b"RIFF" + b"\x00" * 44,
+        "drums": b"RIFF" + b"\x01" * 44,
+        "original": b"RIFF" + b"\x02" * 44,
+        "mix": b"RIFF" + b"\x03" * 44,
+    }
+    paths = _setup_stems_job(job_id, stems)
+    try:
+        r = client.get(f"/api/jobs/{job_id}/stems.zip")
+        assert r.status_code == 200
+        zf = zipfile.ZipFile(io.BytesIO(r.content))
+        names = set(zf.namelist())
+        assert "original.wav" not in names, (
+            "download_all_stems must not include original.wav — it is a re-encoded "
+            "source track produced by the pipeline, not an isolated demucs stem"
+        )
+        assert "mix.wav" not in names, (
+            "download_all_stems must not include mix.wav — it is an amix of the "
+            "selected stems produced by the pipeline, not an isolated demucs stem"
+        )
+        assert "vocals.wav" in names, "vocals.wav (a real stem) must be in the ZIP"
+        assert "drums.wav" in names, "drums.wav (a real stem) must be in the ZIP"
+    finally:
+        _cleanup(paths)
+
+
 def test_zip_each_file_read_only_once_per_stream(client, tmp_path, monkeypatch):
     """Generator must not buffer full ZIP in RAM — each stem is opened and streamed
     without accumulating all file bytes into a single BytesIO buffer."""

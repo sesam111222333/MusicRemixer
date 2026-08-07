@@ -202,7 +202,7 @@ def download_all_stems(job_id: str) -> StreamingResponse:
     if not stems_dir.is_dir() or not stems_dir.is_relative_to(JOBS_DIR.resolve()):
         dec_readers(job_id)
         raise HTTPException(status_code=404, detail="stems not found")
-    wav_files = sorted(stems_dir.glob("*.wav"))
+    wav_files = sorted(f for f in stems_dir.glob("*.wav") if f.stem in STEM_NAMES)
     if not wav_files:
         dec_readers(job_id)
         raise HTTPException(status_code=404, detail="no stems found")
