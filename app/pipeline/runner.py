@@ -9,6 +9,7 @@ from pathlib import Path
 from app.core.config import MAX_DURATION_SEC
 from app.core.models import Job, JobCancelled
 from app.core.persistence import save_job
+from app.core.registry import remove as registry_remove
 from app.pipeline.analyze import analyze
 from app.pipeline.collect import (
     cleanup_source,
@@ -102,6 +103,7 @@ async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
         # Drop partial files so the disk reclaim is immediate.
         if job_dir.is_dir():
             shutil.rmtree(job_dir, ignore_errors=True)
+        registry_remove(job.id)
         return
     except Exception as e:
         # yt-dlp wraps hook exceptions in DownloadError; if the user cancelled
@@ -112,12 +114,14 @@ async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
             _set(job, status="cancelled", stage="Cancelled")
             if job_dir.is_dir():
                 shutil.rmtree(job_dir, ignore_errors=True)
+            registry_remove(job.id)
             return
         logger.exception("pipeline failed for job %s", job.id)
         _set(job, status="error", stage=f"Error: {e}", error=str(e))
         if job_dir.is_dir():
             shutil.rmtree(job_dir, ignore_errors=True)
         _record_stats(job, "error")
+        registry_remove(job.id)
         return
     _set(job, status="done", progress=1.0, stage="Done")
     _record_stats(job, "done")
@@ -194,6 +198,7 @@ async def run_pipeline_from_file(job: Job, source: Path, jobs_dir: Path) -> None
         _set(job, status="cancelled", stage="Cancelled")
         if job_dir.is_dir():
             shutil.rmtree(job_dir, ignore_errors=True)
+        registry_remove(job.id)
         return
     except Exception as e:
         if job.cancel_requested:
@@ -201,12 +206,14 @@ async def run_pipeline_from_file(job: Job, source: Path, jobs_dir: Path) -> None
             _set(job, status="cancelled", stage="Cancelled")
             if job_dir.is_dir():
                 shutil.rmtree(job_dir, ignore_errors=True)
+            registry_remove(job.id)
             return
         logger.exception("pipeline failed for job %s", job.id)
         _set(job, status="error", stage=f"Error: {e}", error=str(e))
         if job_dir.is_dir():
             shutil.rmtree(job_dir, ignore_errors=True)
         _record_stats(job, "error")
+        registry_remove(job.id)
         return
     _set(job, status="done", progress=1.0, stage="Done")
     _record_stats(job, "done")

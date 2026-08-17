@@ -9,6 +9,7 @@ import pytest
 
 from app.core.config import MAX_DURATION_SEC
 from app.core.models import Job, JobCancelled
+from app.core.registry import _jobs
 from app.pipeline.runner import _validate_audio, run_pipeline, run_pipeline_from_file
 
 
@@ -216,3 +217,63 @@ async def test_pipeline_from_file_cleans_job_dir_on_error(tmp_path: Path):
 
     assert job.status == "error"
     assert not (tmp_path / job.id).exists(), "job_dir was not cleaned up on error"
+
+
+@pytest.mark.asyncio
+async def test_error_removes_job_from_registry(tmp_path: Path):
+    """run_pipeline must call registry.remove on the error path.
+    Without it, jobs whose dir is rmtree'd are never visited by sweep_old_jobs
+    (which iterates dirs on disk) and leak in _jobs for the server's lifetime."""
+    job = Job(id="reglerr_00001")
+    _jobs[job.id] = job
+    try:
+        with patch("app.pipeline.runner._run_blocking", side_effect=RuntimeError("boom")):
+            await run_pipeline(job, "https://www.youtube.com/watch?v=dQw4w9WgXcQ", tmp_path)
+        assert job.id not in _jobs
+    finally:
+        _jobs.pop(job.id, None)
+
+
+@pytest.mark.asyncio
+async def test_cancel_removes_job_from_registry(tmp_path: Path):
+    """run_pipeline must call registry.remove on the cancelled path."""
+    job = Job(id="regcanc_00001")
+    job.cancel_requested = True
+    _jobs[job.id] = job
+    try:
+        with patch("app.pipeline.runner._run_blocking", side_effect=JobCancelled()):
+            await run_pipeline(job, "https://www.youtube.com/watch?v=dQw4w9WgXcQ", tmp_path)
+        assert job.id not in _jobs
+    finally:
+        _jobs.pop(job.id, None)
+
+
+@pytest.mark.asyncio
+async def test_from_file_error_removes_job_from_registry(tmp_path: Path):
+    """run_pipeline_from_file must call registry.remove on the error path."""
+    job = Job(id="reglerr_00002")
+    _jobs[job.id] = job
+    source = tmp_path / "audio.wav"
+    source.write_bytes(b"fake")
+    try:
+        with patch("app.pipeline.runner._run_blocking_from_file", side_effect=RuntimeError("boom")):
+            await run_pipeline_from_file(job, source, tmp_path)
+        assert job.id not in _jobs
+    finally:
+        _jobs.pop(job.id, None)
+
+
+@pytest.mark.asyncio
+async def test_from_file_cancel_removes_job_from_registry(tmp_path: Path):
+    """run_pipeline_from_file must call registry.remove on the cancelled path."""
+    job = Job(id="regcanc_00002")
+    job.cancel_requested = True
+    _jobs[job.id] = job
+    source = tmp_path / "audio.wav"
+    source.write_bytes(b"fake")
+    try:
+        with patch("app.pipeline.runner._run_blocking_from_file", side_effect=JobCancelled()):
+            await run_pipeline_from_file(job, source, tmp_path)
+        assert job.id not in _jobs
+    finally:
+        _jobs.pop(job.id, None)
