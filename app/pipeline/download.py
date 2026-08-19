@@ -53,8 +53,14 @@ def validate_youtube_url(url: str) -> str:
 
     normalized = normalize_youtube_url(url)
     # normalize_youtube_url returns the original on playlist-only URLs with
-    # no derivable seed video. We always expect the canonical watch?v=... form.
+    # no derivable seed video. We always expect the canonical watch?v=... form
+    # with a valid 11-char video ID — the startswith check alone is not enough
+    # because the original URL may already start with watch?v= while carrying a
+    # malformed ID (too short, too long, or empty) that normalize left untouched.
     if not normalized.startswith("https://www.youtube.com/watch?v="):
+        raise InvalidYouTubeURL("could not extract a video ID from URL")
+    vid = urllib.parse.parse_qs(urllib.parse.urlparse(normalized).query).get("v", [None])[0]
+    if not vid or not _VIDEO_ID_RE.match(vid):
         raise InvalidYouTubeURL("could not extract a video ID from URL")
     return normalized
 

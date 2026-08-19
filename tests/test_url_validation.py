@@ -90,6 +90,10 @@ def test_accepts_youtube_urls(url: str, expected: str) -> None:
         ("https://music.youtube.com/playlist?list=RDCLAKdQw4w9WgXcQ", "video ID"),
         ("https://music.youtube.com/playlist?list=RDEMdQw4w9WgXcQ", "video ID"),
         ("https://music.youtube.com/playlist?list=RDQMdQw4w9WgXcQ", "video ID"),
+        # Malformed watch?v= — video ID too short, too long, or empty
+        ("https://www.youtube.com/watch?v=abc", "video ID"),
+        ("https://www.youtube.com/watch?v=toolongidthatexceeds11", "video ID"),
+        ("https://www.youtube.com/watch?v=", "video ID"),
     ],
 )
 def test_rejects_bad_urls(url: str, reason_substring: str) -> None:
