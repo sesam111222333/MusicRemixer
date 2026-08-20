@@ -1047,6 +1047,44 @@ def test_get_stem_no_range_still_returns_200(client):
         path.parent.parent.rmdir()
 
 
+def test_get_stem_range_beyond_eof_returns_416(client):
+    """GET with an unsatisfiable Range (start >= file size) must return 416 Range Not Satisfiable.
+
+    RFC 7233 §4.4: the server MUST send 416 with Content-Range: bytes */<size> when
+    the requested range start is at or beyond the end of the resource.
+    Bug: _parse_range returns None for start >= total, which get_stem interprets as
+    "no Range header" and falls through to return 200 with the full file.
+    """
+    job_id = "aabbccddeec3"
+    job = Job(id=job_id)
+    job.status = "done"
+    _jobs[job_id] = job
+    payload = b"RIFF12345678"  # 12 bytes
+    path = _make_stem_file(job_id, "vocals", payload)
+    try:
+        r = client.get(
+            f"/api/jobs/{job_id}/stems/vocals.wav",
+            headers={"Range": "bytes=99999999-"},
+        )
+        assert r.status_code == 416, (
+            f"Expected 416 Range Not Satisfiable for start beyond EOF, got {r.status_code}. "
+            "_parse_range returns None for start >= total; get_stem then treats the "
+            "request as if no Range was sent and returns 200 with the full file — "
+            "RFC 7233 §4.4 violation."
+        )
+        assert "content-range" in r.headers, (
+            "416 response must include Content-Range: bytes */<total>"
+        )
+        assert r.headers["content-range"] == f"bytes */{len(payload)}", (
+            f"Expected Content-Range: bytes */12, got {r.headers.get('content-range')!r}"
+        )
+    finally:
+        _readers.pop(job_id, None)
+        path.unlink(missing_ok=True)
+        path.parent.rmdir()
+        path.parent.parent.rmdir()
+
+
 # ---------------------------------------------------------------------------
 # download_remix — set_proc registration and timeout
 # ---------------------------------------------------------------------------

@@ -62,8 +62,11 @@ def head_stem(job_id: str, name: str) -> Response:
         dec_readers(job_id)
 
 
-def _parse_range(range_header: str, total: int) -> tuple[int, int] | None:
-    """Parse a Range header; return (start, end) inclusive, or None if unsatisfiable."""
+_UNSATISFIABLE = object()  # sentinel: valid Range header but start >= file size
+
+
+def _parse_range(range_header: str, total: int):
+    """Parse a Range header; return (start, end) inclusive, _UNSATISFIABLE, or None if invalid."""
     if not range_header.startswith("bytes="):
         return None
     spec = range_header[6:]
@@ -78,7 +81,9 @@ def _parse_range(range_header: str, total: int) -> tuple[int, int] | None:
             start, end = int(s), int(e)
     except ValueError:
         return None
-    if start > end or start >= total:
+    if start >= total:
+        return _UNSATISFIABLE
+    if start > end:
         return None
     return start, min(end, total - 1)
 
@@ -104,6 +109,13 @@ def get_stem(
         raise
 
     parsed = _parse_range(range, size) if range else None
+
+    if parsed is _UNSATISFIABLE:
+        dec_readers(job_id)
+        raise HTTPException(
+            status_code=416,
+            headers={"Content-Range": f"bytes */{size}"},
+        )
 
     if parsed is not None:
         start, end = parsed
