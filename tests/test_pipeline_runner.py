@@ -220,16 +220,20 @@ async def test_pipeline_from_file_cleans_job_dir_on_error(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_error_removes_job_from_registry(tmp_path: Path):
-    """run_pipeline must call registry.remove on the error path.
-    Without it, jobs whose dir is rmtree'd are never visited by sweep_old_jobs
-    (which iterates dirs on disk) and leak in _jobs for the server's lifetime."""
+async def test_error_keeps_job_in_registry(tmp_path: Path):
+    """After a pipeline failure the job must REMAIN in the registry so that
+    GET /api/jobs/{id} returns status=error (with the error cause) instead of 404.
+    Removing the job on the error path means any REST client that isn't holding
+    a live SSE stream — including the reconnect probe and startJobPolling — will
+    receive 404 and lose the error message forever."""
     job = Job(id="reglerr_00001")
     _jobs[job.id] = job
     try:
-        with patch("app.pipeline.runner._run_blocking", side_effect=RuntimeError("boom")):
+        with patch("app.pipeline.runner._run_blocking", side_effect=RuntimeError("download failed")):
             await run_pipeline(job, "https://www.youtube.com/watch?v=dQw4w9WgXcQ", tmp_path)
-        assert job.id not in _jobs
+        assert job.id in _jobs, "job must remain in registry so clients can fetch the error status"
+        assert _jobs[job.id].status == "error"
+        assert "download failed" in (_jobs[job.id].error or "")
     finally:
         _jobs.pop(job.id, None)
 
@@ -249,16 +253,19 @@ async def test_cancel_removes_job_from_registry(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_from_file_error_removes_job_from_registry(tmp_path: Path):
-    """run_pipeline_from_file must call registry.remove on the error path."""
+async def test_from_file_error_keeps_job_in_registry(tmp_path: Path):
+    """After a run_pipeline_from_file failure the job must REMAIN in the registry
+    so that GET /api/jobs/{id} returns status=error instead of 404."""
     job = Job(id="reglerr_00002")
     _jobs[job.id] = job
     source = tmp_path / "audio.wav"
     source.write_bytes(b"fake")
     try:
-        with patch("app.pipeline.runner._run_blocking_from_file", side_effect=RuntimeError("boom")):
+        with patch("app.pipeline.runner._run_blocking_from_file", side_effect=RuntimeError("audio invalid")):
             await run_pipeline_from_file(job, source, tmp_path)
-        assert job.id not in _jobs
+        assert job.id in _jobs, "job must remain in registry so clients can fetch the error status"
+        assert _jobs[job.id].status == "error"
+        assert "audio invalid" in (_jobs[job.id].error or "")
     finally:
         _jobs.pop(job.id, None)
 

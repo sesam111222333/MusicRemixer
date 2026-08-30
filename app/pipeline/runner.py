@@ -121,7 +121,6 @@ async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
         if job_dir.is_dir():
             shutil.rmtree(job_dir, ignore_errors=True)
         _record_stats(job, "error")
-        registry_remove(job.id)
         return
     _set(job, status="done", progress=1.0, stage="Done")
     _record_stats(job, "done")
@@ -213,7 +212,6 @@ async def run_pipeline_from_file(job: Job, source: Path, jobs_dir: Path) -> None
         if job_dir.is_dir():
             shutil.rmtree(job_dir, ignore_errors=True)
         _record_stats(job, "error")
-        registry_remove(job.id)
         return
     _set(job, status="done", progress=1.0, stage="Done")
     _record_stats(job, "done")
