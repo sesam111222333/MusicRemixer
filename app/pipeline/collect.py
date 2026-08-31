@@ -204,3 +204,16 @@ def sweep_old_jobs(jobs_dir: Path) -> None:
             registry_remove(d.name)
         finally:
             release_sweep_claim(d.name)
+
+    # Second pass: purge registry entries for terminal jobs whose directories
+    # were already deleted (e.g. error jobs cleaned up by the runner). These
+    # are never visited by the directory loop above, so without this pass they
+    # would accumulate in _jobs for the lifetime of the server process.
+    for job_id, job in jobs.items():
+        if job.status not in _TERMINAL:
+            continue
+        if job.created_at >= cutoff:
+            continue
+        if (jobs_dir / job_id).is_dir():
+            continue  # has a directory; the first pass handled (or deferred) it
+        registry_remove(job_id)

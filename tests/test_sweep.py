@@ -185,3 +185,39 @@ def test_skip_terminal_job_with_active_readers(tmp_path: Path):
 
     assert d.is_dir(), "directory must not be deleted while a reader is active"
     assert job.id in _jobs, "registry entry must not be removed while a reader is active"
+
+
+def test_sweep_removes_dirless_error_job_after_ttl(tmp_path: Path):
+    """Error jobs whose job_dir was already deleted must be evicted from the
+    registry by sweep_old_jobs once they are older than JOB_TTL_SECONDS.
+
+    Bug scenario: pipeline fails → runner calls shutil.rmtree(job_dir) but NOT
+    registry_remove → job stays in _jobs with status=error and no directory.
+    sweep_old_jobs only iterated directories on disk, so the dirless entry was
+    never visited → unbounded registry growth for every failed job."""
+    job = Job(id="dirless_error_001")
+    job.status = "error"
+    job.created_at = time.time() - 999_999
+    _jobs[job.id] = job
+    # No directory created — mirrors the runner's shutil.rmtree on the error path.
+
+    with patch("app.pipeline.collect.JOB_TTL_SECONDS", 60):
+        sweep_old_jobs(tmp_path)
+
+    assert job.id not in _jobs, (
+        "stale error job with no directory must be swept from the registry"
+    )
+
+
+def test_sweep_keeps_recent_dirless_error_job(tmp_path: Path):
+    """A dirless error job that is still within TTL must NOT be removed — the
+    client may still be polling GET /api/jobs/{id} to display the error."""
+    job = Job(id="dirless_error_002")
+    job.status = "error"
+    job.created_at = time.time()  # fresh
+    _jobs[job.id] = job
+
+    with patch("app.pipeline.collect.JOB_TTL_SECONDS", 60):
+        sweep_old_jobs(tmp_path)
+
+    assert job.id in _jobs, "recent error job must not be swept before TTL expires"
