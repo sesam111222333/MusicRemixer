@@ -8,22 +8,29 @@ _STATS_FILE = Path(__file__).parent.parent / "data" / "job_stats.json"
 _MAX_ENTRIES = 1000
 
 
-def _load() -> list[dict]:
+def _load() -> tuple[list[dict], int]:
+    """Return (recent_entries, cumulative_total).
+
+    Handles old list-format files (total = len(list)) transparently.
+    """
     try:
-        return json.loads(_STATS_FILE.read_text())
+        raw = json.loads(_STATS_FILE.read_text())
+        if isinstance(raw, list):
+            return raw, len(raw)
+        return raw["entries"], raw["total"]
     except Exception:
-        return []
+        return [], 0
 
 
-def _save(entries: list[dict]) -> None:
+def _save(entries: list[dict], total: int) -> None:
     _STATS_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = _STATS_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(entries))
+    tmp.write_text(json.dumps({"total": total, "entries": entries}))
     tmp.replace(_STATS_FILE)
 
 
 def record_completion(job_id: str, title: str | None, status: str) -> None:
-    entries = _load()
+    entries, total = _load()
     entries.append({
         "id": job_id,
         "displayName": title or job_id,
@@ -31,13 +38,13 @@ def record_completion(job_id: str, title: str | None, status: str) -> None:
         "isOnline": False,
         "jobStatus": status,
     })
-    _save(entries[-_MAX_ENTRIES:])
+    _save(entries[-_MAX_ENTRIES:], total + 1)
 
 
 def get_stats_response() -> dict:
     from app.core.registry import all_jobs
 
-    entries = _load()
+    entries, total = _load()
     cutoff_24h = int((time.time() - 86400) * 1000)
 
     active = [
@@ -55,6 +62,6 @@ def get_stats_response() -> dict:
 
     return {
         "users": active + recent,
-        "jobs_total": len(entries),
+        "jobs_total": total,
         "jobs_last_24h": sum(1 for e in entries if e.get("lastSeen", 0) > cutoff_24h),
     }
