@@ -195,8 +195,8 @@ def sweep_old_jobs(jobs_dir: Path) -> None:
             try:
                 if d.stat().st_mtime >= cutoff:
                     continue
-            except FileNotFoundError:
-                continue  # already deleted by a concurrent sweep
+            except OSError:
+                continue  # deleted by a concurrent sweep, or unreadable (ESTALE, EPERM)
         if not claim_for_sweep(d.name):
             continue  # stem files are actively being streamed; defer deletion
         try:

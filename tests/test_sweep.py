@@ -221,3 +221,32 @@ def test_sweep_keeps_recent_dirless_error_job(tmp_path: Path):
         sweep_old_jobs(tmp_path)
 
     assert job.id in _jobs, "recent error job must not be swept before TTL expires"
+
+
+def test_orphan_stat_oserror_silenced(tmp_path: Path):
+    """Non-FileNotFoundError OSError from d.stat() in the orphan branch must not propagate.
+
+    A stale NFS mount (ESTALE) or a permission problem can raise PermissionError or
+    another OSError subclass from the explicit d.stat() call in the elif orphan branch.
+    sweep_old_jobs is best-effort; that error must be silenced so it cannot bleed into
+    run_pipeline's generic except and spuriously mark an unrelated new job as status=error.
+    """
+    d = _mkdir(tmp_path, "orphan_perm_error")
+    # No registry entry → falls into the orphan elif branch.
+
+    real_stat = type(d).stat
+    stat_call_counts: dict[str, int] = {}
+
+    def counting_stat(self, **kwargs):
+        key = str(self)
+        n = stat_call_counts.get(key, 0) + 1
+        stat_call_counts[key] = n
+        # is_dir() calls stat internally (n==1); the explicit elif d.stat() is n==2.
+        # Raise on the second call to simulate a PermissionError on the orphan stat.
+        if self == d and n >= 2:
+            raise PermissionError(f"[Errno 13] simulated EPERM on orphan: {self}")
+        return real_stat(self, **kwargs)
+
+    with patch.object(type(d), "stat", counting_stat):
+        with patch("app.pipeline.collect.JOB_TTL_SECONDS", 60):
+            sweep_old_jobs(tmp_path)  # must not raise

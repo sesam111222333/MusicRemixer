@@ -271,6 +271,47 @@ async def test_from_file_error_keeps_job_in_registry(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_sweep_oserror_does_not_fail_new_job(tmp_path: Path):
+    """An OSError from sweep_old_jobs must NOT mark the new job as error.
+
+    Regression: sweep_old_jobs was called inside the same try/except that routes
+    all exceptions to job.status=error. A PermissionError on a stale orphan directory
+    would spuriously fail and rmtree the just-submitted job's directory.
+    """
+    job = Job(id="sweepfail_0001")
+
+    def bad_sweep(*args, **kwargs):
+        raise PermissionError("[Errno 13] simulated stale NFS orphan")
+
+    with patch("app.pipeline.runner.sweep_old_jobs", side_effect=bad_sweep):
+        with patch("app.pipeline.runner._run_blocking", return_value=None):
+            await run_pipeline(job, "https://www.youtube.com/watch?v=dQw4w9WgXcQ", tmp_path)
+
+    assert job.status == "done", (
+        f"expected 'done', got {job.status!r} — sweep_old_jobs error must not bleed into the job"
+    )
+
+
+@pytest.mark.asyncio
+async def test_from_file_sweep_oserror_does_not_fail_new_job(tmp_path: Path):
+    """Same as test_sweep_oserror_does_not_fail_new_job but for run_pipeline_from_file."""
+    job = Job(id="sweepfail_0002")
+    source = tmp_path / "audio.wav"
+    source.write_bytes(b"fake audio")
+
+    def bad_sweep(*args, **kwargs):
+        raise PermissionError("[Errno 13] simulated stale NFS orphan")
+
+    with patch("app.pipeline.runner.sweep_old_jobs", side_effect=bad_sweep):
+        with patch("app.pipeline.runner._run_blocking_from_file", return_value=None):
+            await run_pipeline_from_file(job, source, tmp_path)
+
+    assert job.status == "done", (
+        f"expected 'done', got {job.status!r} — sweep_old_jobs error must not bleed into the job"
+    )
+
+
+@pytest.mark.asyncio
 async def test_from_file_cancel_removes_job_from_registry(tmp_path: Path):
     """run_pipeline_from_file must call registry.remove on the cancelled path."""
     job = Job(id="regcanc_00002")

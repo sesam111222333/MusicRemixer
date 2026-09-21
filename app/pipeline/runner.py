@@ -94,7 +94,10 @@ async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
         job_dir.mkdir(parents=True, exist_ok=True)
         # Best-effort sweep of stale jobs before acquiring the pipeline lock so
         # disk reclaim happens even while another job is running.
-        await asyncio.to_thread(sweep_old_jobs, jobs_dir)
+        try:
+            await asyncio.to_thread(sweep_old_jobs, jobs_dir)
+        except Exception:
+            logger.debug("sweep_old_jobs failed (best-effort)", exc_info=True)
         async with _pipeline_lock:
             await asyncio.to_thread(_run_blocking, job, url, job_dir)
     except JobCancelled:
@@ -188,7 +191,10 @@ def _run_blocking_from_file(job: Job, source: Path, job_dir: Path) -> None:
 async def run_pipeline_from_file(job: Job, source: Path, jobs_dir: Path) -> None:
     job_dir = jobs_dir / job.id
     try:
-        await asyncio.to_thread(sweep_old_jobs, jobs_dir)
+        try:
+            await asyncio.to_thread(sweep_old_jobs, jobs_dir)
+        except Exception:
+            logger.debug("sweep_old_jobs failed (best-effort)", exc_info=True)
         async with _pipeline_lock:
             _set(job, status="analyzing", progress=0.0, stage="Analyzing...")
             await asyncio.to_thread(_run_blocking_from_file, job, source, job_dir)
