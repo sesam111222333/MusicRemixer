@@ -3,7 +3,8 @@ import {
   setLoopStart, setLoopEnd,
 } from "./state.js";
 import { renderEmptyShell, rearmLoopWrap } from "./player.js";
-import { wireJobForm } from "./job.js";
+import { wireJobForm, openJob } from "./job.js";
+import { initHistoryPanel } from "./history.js";
 import { wireTransportButtons } from "./transport.js";
 import { togglePlayPause, updateLoopRegionVisual, applyWaveZoom } from "./transport.js";
 import { wireStemListControls, wireMixerToolbar } from "./mixer.js";
@@ -11,6 +12,7 @@ import { wireStemListControls, wireMixerToolbar } from "./mixer.js";
 // ─── Wire everything up ───
 
 wireJobForm();
+initHistoryPanel(openJob);
 wireTransportButtons();
 wireStemListControls();
 wireMixerToolbar();

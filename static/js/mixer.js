@@ -110,7 +110,10 @@ export function refreshMixerVisuals() {
     if (row) {
       const muteBtn = row.querySelector(".mute");
       const soloBtn = row.querySelector(".solo");
-      if (soloBtn) soloBtn.classList.toggle("active", state.soloed);
+      if (soloBtn) {
+        soloBtn.classList.toggle("active", state.soloed);
+        soloBtn.setAttribute("aria-pressed", String(state.soloed));
+      }
       const iconToggle = row.querySelector(".lane-icon-toggle");
       if (iconToggle) {
         iconToggle.classList.toggle("active", !state.muted);
@@ -232,8 +235,10 @@ export async function importSession(file) {
 }
 
 export function setLaneControlsEnabled(enabled) {
-  const exportBtn = document.getElementById("session-export");
-  if (exportBtn) exportBtn.disabled = !enabled;
+  for (const id of ["session-export", "mixer-reset", "mixer-mute-all", "mixer-clear-solo"]) {
+    const b = document.getElementById(id);
+    if (b) b.disabled = !enabled;
+  }
   for (const b of mixerEl.querySelectorAll(".ms-btn")) b.disabled = !enabled;
   for (const b of mixerEl.querySelectorAll(".lane-icon-toggle")) b.disabled = !enabled;
   for (const a of mixerEl.querySelectorAll(".lane-dl")) {
@@ -504,7 +509,10 @@ export function renderMixerRow(stem) {
       <button type="button" class="lane-icon-toggle active mute" aria-label="Toggle ${display}" aria-pressed="true">
         ${stemIconMarkup(stem.name)}
       </button>
-      <span class="lane-name" style="color:${color}">${display}</span>
+      <span class="lane-name-line">
+        <span class="lane-name" style="color:${color}">${display}</span>
+        <button type="button" class="ms-btn solo lane-solo" aria-label="Solo ${display}" aria-pressed="false" title="Solo">S</button>
+      </span>
     </div>
     <div class="lane-controls"></div>
   `;
@@ -537,6 +545,7 @@ export function renderMixerRow(stem) {
   refresh();
 
   muteBtn.addEventListener("click", () => toggleStemMute(stem.name));
+  row.querySelector(".lane-solo").addEventListener("click", () => toggleStemSolo(stem.name));
 
   return { row, vuEl: vu };
 }

@@ -95,6 +95,21 @@
   opacity: 0.25;
 }
 
+.lane-name-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ms-btn.lane-solo {
+  width: 18px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: 10px;
+  flex: 0 0 auto;
+}
+
 .lane-name {
   color: #d7dce3 !important;
   font-size: 14px;

@@ -18,6 +18,7 @@
     <link rel="stylesheet" href="/css/mixer.css" />
     <link rel="stylesheet" href="/css/waves.css" />
     <link rel="stylesheet" href="/css/job.css" />
+    <link rel="stylesheet" href="/css/history.css" />
     <link rel="stylesheet" href="/css/responsive.css" />
   </head>
   <body>
@@ -42,6 +43,15 @@
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
               Upload file
             </button>
+            <div class="history-wrap hidden" id="history-wrap">
+              <button class="source-tab" id="history-toggle" type="button" aria-expanded="false" aria-controls="history-panel" aria-haspopup="menu">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>
+                Recent
+              </button>
+              <div id="history-panel" class="history-panel surface-panel hidden" role="menu" aria-label="Recent tracks">
+                <div id="history-list" class="history-list"></div>
+              </div>
+            </div>
           </div>
           <div class="import-input-row">
             <label class="url-wrap" id="url-panel">
@@ -173,7 +183,6 @@
           <h3>Beat Overview</h3>
           <div class="beat-values">
             <strong id="summary-bpm">— <small>BPM</small></strong>
-            <strong>4/4 <small>Time Sig.</small></strong>
           </div>
         </div>
       </div>
@@ -309,8 +318,13 @@
           <div class="transport-left">
             <button id="dl-mix" class="btn-dl-mix hidden" type="button" aria-label="Download current mix as WAV">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              Download Current Mix
+              Download mix
             </button>
+            <div class="mixer-tools">
+              <button id="mixer-reset" type="button" title="Reset all faders, mutes, solos and pitch" disabled>Reset</button>
+              <button id="mixer-mute-all" type="button" title="Mute all / unmute all" disabled>Mute all</button>
+              <button id="mixer-clear-solo" type="button" title="Clear all solos" disabled>Clear solo</button>
+            </div>
           </div>
           <div class="np-transport">
             <span id="footer-time-elapsed">00:00</span>

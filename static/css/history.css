@@ -1,0 +1,115 @@
+/* ───────────── Recent tracks (dropdown under the source tabs) ───────────── */
+
+.history-wrap {
+  position: relative;
+  margin-left: auto;
+}
+
+.history-toggle[aria-expanded="true"],
+#history-toggle[aria-expanded="true"] {
+  border-color: rgba(216, 168, 74, 0.55);
+  color: var(--gold-bright);
+}
+
+.history-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 50;
+  width: min(380px, calc(100vw - 32px));
+  padding: 4px 0;
+  border: 1px solid var(--glass-line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 340px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.history-empty {
+  padding: 14px;
+  color: var(--ink-dim);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--glass-line);
+  color: #e6e6e6;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.history-item:last-child {
+  border-bottom: none;
+}
+
+.history-item:hover:not(:disabled),
+.history-item:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+  outline: none;
+}
+
+.history-item:hover:not(:disabled) .history-title {
+  color: var(--gold-bright);
+}
+
+.history-item:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.history-thumb {
+  flex-shrink: 0;
+  width: 60px;
+  height: 36px;
+  background: var(--bg-deep);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+
+.history-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.history-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.history-title {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-chips {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--ink-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

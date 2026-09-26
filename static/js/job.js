@@ -8,6 +8,7 @@ import {
 import { destroyPlayer } from "./player.js";
 import { wireUpAudio } from "./player.js";
 import { stagePhrases } from "./phrases.js";
+import { saveToHistory } from "./history.js";
 
 // Playful stage label rotation (Claude-Code-style flair). The backend
 // emits truthful stage strings; we surface them in the small #job-detail
@@ -87,6 +88,14 @@ export function reset() {
   progressEl.value = 0;
   setSubmitProcessing(false);
   setCurrentJobId(null);
+  renderedJobs.clear();
+}
+
+// Open a finished job (from the Recent list) in the studio.
+export function openJob(state) {
+  reset();
+  setCurrentJobId(state.job_id);
+  applyState(state);
 }
 
 function applyState(state) {
@@ -150,6 +159,7 @@ function applyState(state) {
       jobBox.classList.add("hidden");
     if (!renderedJobs.has(state.job_id)) {
       renderedJobs.add(state.job_id);
+      saveToHistory(state);
       wireUpAudio(
         state.job_id,
         state.stems || [],
