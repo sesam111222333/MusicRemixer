@@ -149,6 +149,8 @@ function applyState(state) {
 
   if (state.status === "error") {
     stopJobPolling();
+    // The error box says it; the job box would repeat "Error: ..." beside it.
+    jobBox.classList.add("hidden");
     showError(state.error || "Unknown error");
     setSubmitProcessing(false);
   } else if (state.status === "cancelled") {

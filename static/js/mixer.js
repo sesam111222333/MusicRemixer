@@ -446,6 +446,9 @@ function makeVolumeKnob(stemName, color) {
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
     e.preventDefault();
+    // preventDefault stops the browser from focusing; do it ourselves so the
+    // arrow keys work right after a click, not only after Tab.
+    wrap.focus();
   });
   wrap.addEventListener("dblclick", () => setLaneVolume(stemName, 1));
   wrap.addEventListener("wheel", (e) => {
