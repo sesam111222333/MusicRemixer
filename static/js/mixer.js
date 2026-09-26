@@ -17,14 +17,30 @@ export function ensureMixerStateDefaults() {
   }
 }
 
+// Mixer entries are read from localStorage and from imported session files —
+// both user-controlled. Coerce here, once, so a bad value ("loud", 999) can't
+// reach applyMix/toFixed and break the studio for that job on every load.
+function sanitizeEntry(raw) {
+  const d = defaultMixerEntry();
+  if (!raw || typeof raw !== "object") return d;
+  const volume = Number(raw.volume);
+  const pitch = Number(raw.pitch);
+  return {
+    volume: Number.isFinite(volume) ? Math.max(0, Math.min(LANE_VOLUME_MAX, volume)) : d.volume,
+    muted: raw.muted === true,
+    soloed: raw.soloed === true,
+    pitch: Number.isFinite(pitch) ? Math.round(Math.max(-12, Math.min(12, pitch))) : d.pitch,
+  };
+}
+
 export function loadMixIntoState(jobId) {
   let stored = {};
   try {
     const raw = localStorage.getItem(`stemdeck:mix:${jobId}`);
-    if (raw) stored = JSON.parse(raw);
+    if (raw) stored = JSON.parse(raw) || {};
   } catch { /* ignore */ }
   for (const name of STEM_NAMES) {
-    Object.assign(mixerState[name], defaultMixerEntry(), stored[name] || {});
+    Object.assign(mixerState[name], sanitizeEntry(stored[name]));
   }
 }
 
@@ -167,9 +183,19 @@ export async function importSession(file) {
   } catch {
     throw new Error("Invalid file — could not parse JSON");
   }
-  if (data.version !== 1 || !data.job_id || typeof data.stems !== "object") {
+  if (data?.version !== 1 || !data.job_id || !data.stems || typeof data.stems !== "object") {
     throw new Error("Unrecognised session format");
   }
+  const loop = data.loop;
+  if (loop != null && !(typeof loop.enabled === "boolean"
+      && Number.isFinite(loop.start) && Number.isFinite(loop.end)
+      && loop.start >= 0 && loop.start < loop.end)) {
+    throw new Error("Invalid loop range in session");
+  }
+  if (data.zoom != null && !Number.isFinite(data.zoom)) {
+    throw new Error("Invalid zoom in session");
+  }
+  const stems = Object.fromEntries(STEM_NAMES.map((n) => [n, sanitizeEntry(data.stems[n])]));
 
   // Verify the job still exists on the server.
   const res = await fetch(`/api/jobs/${data.job_id}`);
@@ -179,21 +205,21 @@ export async function importSession(file) {
 
   // Always persist to localStorage so the mix applies when the job next loads.
   try {
-    localStorage.setItem(`stemdeck:mix:${data.job_id}`, JSON.stringify(data.stems));
+    localStorage.setItem(`stemdeck:mix:${data.job_id}`, JSON.stringify(stems));
   } catch { /* ignore quota errors */ }
 
   // If this job is currently open, apply state immediately.
   if (currentJobId === data.job_id) {
     for (const name of STEM_NAMES) {
       if (!mixerState[name]) mixerState[name] = defaultMixerEntry();
-      Object.assign(mixerState[name], defaultMixerEntry(), data.stems[name] || {});
+      Object.assign(mixerState[name], stems[name]);
     }
-    if (data.loop && typeof data.loop.enabled === "boolean") {
-      setLoopEnabled(data.loop.enabled);
-      if (typeof data.loop.start === "number") setLoopStart(data.loop.start);
-      if (typeof data.loop.end === "number") setLoopEnd(data.loop.end);
+    if (loop) {
+      setLoopEnabled(loop.enabled);
+      setLoopStart(loop.start);
+      setLoopEnd(loop.end);
     }
-    if (typeof data.zoom === "number") {
+    if (data.zoom != null) {
       setWaveZoom(Math.max(1, Math.min(32, data.zoom)));
     }
     refreshMixerVisuals();
