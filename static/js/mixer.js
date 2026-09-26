@@ -44,6 +44,12 @@ function saveMix() {
   } catch { /* ignore */ }
 }
 
+// Volume/mute/solo only. Pitch is deliberately NOT applied to playback:
+// playbackRate and AudioBufferSourceNode.detune both change speed
+// (computedPlaybackRate = rate * 2^(detune/1200)), which would drift the
+// stem out of sync. Pitch lives in mixerState and is rendered by the server
+// into the downloaded mix (remix.wav, asetrate+atempo). A live pitch needs a
+// real pitch shifter (e.g. an AudioWorklet); until then the UI says "export".
 export function applyMix() {
   if (!multitrack) return;
   const anySolo = TRACK_NAMES.some((name) => trackIndex[name] !== undefined && mixerState[name]?.soloed);
@@ -325,7 +331,6 @@ export function setPitch(name, semitones) {
   state.pitch = Math.round(Math.max(-12, Math.min(12, semitones)));
   const wrap = mixerEl.querySelector(`.pitch-control[data-stem="${name}"]`);
   if (wrap) refreshPitchControl(wrap, state.pitch);
-  applyMix();
   saveMix();
 }
 
@@ -346,14 +351,13 @@ function makePitchControl(stemName, color) {
   slider.max = "12";
   slider.step = "1";
   slider.value = "0";
-  slider.title = "Pitch offset ±12 semitones · double-click to reset";
+  slider.title = "Pitch offset ±12 semitones for the downloaded mix (not heard in playback) · double-click to reset";
 
   slider.addEventListener("input", () => {
     const v = parseInt(slider.value, 10);
     label.textContent = pitchLabel(v);
     const state = mixerState[stemName];
     if (state) state.pitch = v;
-    applyMix();
     saveMix();
   });
 
@@ -361,7 +365,11 @@ function makePitchControl(stemName, color) {
     setPitch(stemName, 0);
   });
 
-  wrap.append(label, slider);
+  const note = document.createElement("span");
+  note.className = "pitch-note";
+  note.textContent = "export";
+
+  wrap.append(label, slider, note);
   return wrap;
 }
 
