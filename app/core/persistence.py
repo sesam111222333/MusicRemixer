@@ -53,9 +53,6 @@ def load_all_jobs() -> None:
                 lufs=state.get("lufs"),
                 peak_db=state.get("peak_db"),
                 stems=state.get("stems", []),
-                backend=state.get("backend", "bsroformer"),
-                selected_stems=state.get("selected_stems", []),
-                mix_url=state.get("mix_url"),
                 created_at=state.get("created_at", job_dir.stat().st_mtime),
             )
             register(job)

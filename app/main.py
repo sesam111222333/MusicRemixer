@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from app.api.router import router
-from app.core.config import DEMUCS_DEVICE, DEMUCS_MODEL, JOBS_DIR, STATIC_DIR
+from app.core.config import BSROFORMER_MODEL, DEMUCS_DEVICE, JOBS_DIR, STATIC_DIR
 from app.core.persistence import load_all_jobs
 
 # Show our INFO-level logs through uvicorn's root handler. Without this,
@@ -14,7 +14,7 @@ from app.core.persistence import load_all_jobs
 # logger.info(...) call across the app, including the analyze
 # diagnostics ("chroma:", "key candidates:").
 logging.getLogger("stemdeck").setLevel(logging.INFO)
-logging.getLogger("stemdeck").info("demucs config: model=%s device=%s", DEMUCS_MODEL, DEMUCS_DEVICE)
+logging.getLogger("stemdeck").info("separation: %s + htdemucs_ft on %s", BSROFORMER_MODEL, DEMUCS_DEVICE)
 
 # Pre-import librosa so the first job submission doesn't pay the 1-2 s
 # cost of numpy/scipy/numba lazy initialization. Adds ~1 s to server

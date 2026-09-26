@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from app.core.config import MAX_DURATION_SEC
@@ -11,19 +13,13 @@ from app.core.models import Job, JobCancelled
 from app.core.persistence import save_job
 from app.core.registry import remove as registry_remove
 from app.pipeline.analyze import analyze
-from app.pipeline.collect import (
-    cleanup_source,
-    collect,
-    make_original_track,
-    make_selected_mix,
-    sweep_old_jobs,
-)
+from app.pipeline.collect import cleanup_source, collect, sweep_old_jobs
 from app.pipeline.download import _set, download
 from app.pipeline.separate import separate
 
 logger = logging.getLogger("stemdeck.pipeline")
 
-# Only one heavy job runs at a time -- Demucs is GPU/CPU-hungry.
+# Only one heavy job runs at a time -- separation is GPU/CPU-hungry.
 _pipeline_lock = asyncio.Semaphore(1)
 
 
@@ -41,60 +37,48 @@ def _check_cancel(job: Job) -> None:
         raise JobCancelled()
 
 
+def _process(job: Job, source: Path, job_dir: Path) -> None:
+    """Shared tail of both entry points: analyze, separate, collect."""
+    analyze(job, source)
+    _check_cancel(job)
+    stems_root = separate(job, source, job_dir)
+    found = collect(stems_root, job_dir)
+    # The source (100-300 MB) is not used after separation.
+    cleanup_source(job_dir)
+    job.stems = [{"name": name, "url": f"/api/jobs/{job.id}/stems/{name}.wav"} for name in found]
+    _check_cancel(job)
+
+
 def _run_blocking(job: Job, url: str, job_dir: Path) -> None:
     _check_cancel(job)
     source = download(job, url, job_dir)
     _check_cancel(job)
-    analyze(job, source)
-    _check_cancel(job)
-    stems_root = separate(job, source, job_dir)
-    found = collect(job, stems_root, job_dir)
-    stems_dir = job_dir / "stems"
-    # Source download (100-300 MB) is no longer used by anything below
-    # -- both the original-complement and the selected-mix are built
-    # from the demucs-emitted stems. Reclaim disk before the ffmpeg
-    # amix steps in case they need scratch space.
-    cleanup_source(job_dir)
-    job.stems = [{"name": name, "url": f"/api/jobs/{job.id}/stems/{name}.wav"} for name in found]
-    # Subset post-processing. When the user kept all 6 stems, both of
-    # these are skipped -- the original is the sum of the stems and a
-    # mix would equal the original. When a strict subset was chosen:
-    #   - original.wav: complement of the selection (sum of unselected
-    #     stems) so the studio can play it alongside the isolated
-    #     selected stems and reconstruct the full song without doubling.
-    #   - mix.wav: ffmpeg amix of the selected stems for download.
-    # Update stage so the import-progress UI doesn't keep saying
-    # "Separating stems..." for the extra ~5-30 s ffmpeg adds.
-    _check_cancel(job)
-    _set(job, stage="Mixing tracks...")
-    original_path = make_original_track(job, job_dir, stems_dir)
-    if original_path is not None:
-        job.stems.insert(
-            0,
-            {
-                "name": "original",
-                "url": f"/api/jobs/{job.id}/stems/original.wav",
-            },
-        )
-    _check_cancel(job)
-    mix_path = make_selected_mix(job, stems_dir, found)
-    if mix_path is not None:
-        # mix_path may point at mix.wav (multi-stem amix) or directly at
-        # one of the existing stem WAVs (single-stem short-circuit).
-        # Either way, .name gives us the URL segment.
-        job.mix_url = f"/api/jobs/{job.id}/stems/{mix_path.name}"
-    _check_cancel(job)
+    _process(job, source, job_dir)
 
 
-async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
+def _run_blocking_from_file(job: Job, source: Path, job_dir: Path) -> None:
+    _check_cancel(job)
+    job.duration_sec = _validate_audio(source)
+    _process(job, source, job_dir)
+
+
+async def _run(
+    job: Job,
+    jobs_dir: Path,
+    first_status: str,
+    first_stage: str,
+    blocking: Callable[..., None],
+    arg: object,
+) -> None:
     job_dir = jobs_dir / job.id
     # One try/except covers everything from directory creation through pipeline
     # execution. If anything before the lock raises, the job would otherwise
     # stay stuck on `queued` forever -- transition to `error` instead.
     try:
         job_dir.mkdir(parents=True, exist_ok=True)
-        # Best-effort sweep of stale jobs before acquiring the pipeline lock so
-        # disk reclaim happens even while another job is running.
+        # Sweep stale jobs before waiting for the lock so disk reclaim happens
+        # even while another job is running. A failing sweep must not fail
+        # this job, but it must be visible.
         try:
             await asyncio.to_thread(sweep_old_jobs, jobs_dir)
         except Exception:
@@ -103,42 +87,38 @@ async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
             # Leave "queued" in the same event-loop step that takes the lock:
             # cancel_job treats "queued" as "not started" (see app/api/jobs.py).
             _check_cancel(job)
-            _set(job, status="downloading", progress=0.0, stage="Processing...")
-            await asyncio.to_thread(_run_blocking, job, url, job_dir)
-    except JobCancelled:
-        logger.info("pipeline cancelled for job %s", job.id)
-        _set(job, status="cancelled", stage="Cancelled")
-        # Drop partial files so the disk reclaim is immediate.
-        if job_dir.is_dir():
-            shutil.rmtree(job_dir, ignore_errors=True)
-        registry_remove(job.id)
-        return
+            _set(job, status=first_status, progress=0.0, stage=first_stage)
+            await asyncio.to_thread(blocking, job, arg, job_dir)
     except Exception as e:
-        # yt-dlp wraps hook exceptions in DownloadError; if the user cancelled
-        # mid-download the underlying cause is JobCancelled but it arrives here
-        # as a generic exception. Detect via the flag and route to cancelled.
-        if job.cancel_requested:
-            logger.info("pipeline cancelled (wrapped) for job %s", job.id)
+        # yt-dlp wraps hook exceptions in DownloadError, so a cancel can arrive
+        # as a generic exception -- the flag decides.
+        if isinstance(e, JobCancelled) or job.cancel_requested:
+            logger.info("pipeline cancelled for job %s", job.id)
             _set(job, status="cancelled", stage="Cancelled")
-            if job_dir.is_dir():
-                shutil.rmtree(job_dir, ignore_errors=True)
+            # Drop partial files so the disk reclaim is immediate.
+            shutil.rmtree(job_dir, ignore_errors=True)
             registry_remove(job.id)
             return
         logger.exception("pipeline failed for job %s", job.id)
         _set(job, status="error", stage=f"Error: {e}", error=str(e))
-        if job_dir.is_dir():
-            shutil.rmtree(job_dir, ignore_errors=True)
+        shutil.rmtree(job_dir, ignore_errors=True)
         _record_stats(job, "error")
         return
     _set(job, status="done", progress=1.0, stage="Done")
     _record_stats(job, "done")
     save_job(job)
-    save_job(job)
+
+
+async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
+    await _run(job, jobs_dir, "downloading", "Processing...", _run_blocking, url)
+
+
+async def run_pipeline_from_file(job: Job, source: Path, jobs_dir: Path) -> None:
+    await _run(job, jobs_dir, "analyzing", "Analyzing...", _run_blocking_from_file, source)
 
 
 def _validate_audio(source: Path) -> float:
     """Validate that source is a readable audio file and return its duration in seconds."""
-    import json as _json
     result = subprocess.run(
         [
             "ffprobe", "-v", "quiet",
@@ -152,7 +132,7 @@ def _validate_audio(source: Path) -> float:
     if result.returncode != 0:
         raise ValueError("Uploaded file is not a valid audio file")
     try:
-        info = _json.loads(result.stdout)
+        info = json.loads(result.stdout)
         if not info.get("streams"):
             raise ValueError("Uploaded file contains no audio stream")
         fmt = info.get("format", {})
@@ -169,62 +149,3 @@ def _validate_audio(source: Path) -> float:
         mins = MAX_DURATION_SEC // 60
         raise ValueError(f"Duration {int(dur // 60)} min exceeds limit of {mins} min")
     return dur
-
-
-def _run_blocking_from_file(job: Job, source: Path, job_dir: Path) -> None:
-    _check_cancel(job)
-    job.duration_sec = _validate_audio(source)
-    analyze(job, source)
-    _check_cancel(job)
-    stems_root = separate(job, source, job_dir)
-    found = collect(job, stems_root, job_dir)
-    stems_dir = job_dir / "stems"
-    cleanup_source(job_dir)
-    job.stems = [{"name": name, "url": f"/api/jobs/{job.id}/stems/{name}.wav"} for name in found]
-    _check_cancel(job)
-    _set(job, stage="Mixing tracks...")
-    original_path = make_original_track(job, job_dir, stems_dir)
-    if original_path is not None:
-        job.stems.insert(0, {"name": "original", "url": f"/api/jobs/{job.id}/stems/original.wav"})
-    _check_cancel(job)
-    mix_path = make_selected_mix(job, stems_dir, found)
-    if mix_path is not None:
-        job.mix_url = f"/api/jobs/{job.id}/stems/{mix_path.name}"
-    _check_cancel(job)
-
-
-async def run_pipeline_from_file(job: Job, source: Path, jobs_dir: Path) -> None:
-    job_dir = jobs_dir / job.id
-    try:
-        try:
-            await asyncio.to_thread(sweep_old_jobs, jobs_dir)
-        except Exception:
-            logger.exception("sweep_old_jobs failed; old jobs are not being cleaned up")
-        async with _pipeline_lock:
-            _check_cancel(job)
-            _set(job, status="analyzing", progress=0.0, stage="Analyzing...")
-            await asyncio.to_thread(_run_blocking_from_file, job, source, job_dir)
-    except JobCancelled:
-        logger.info("pipeline cancelled for job %s", job.id)
-        _set(job, status="cancelled", stage="Cancelled")
-        if job_dir.is_dir():
-            shutil.rmtree(job_dir, ignore_errors=True)
-        registry_remove(job.id)
-        return
-    except Exception as e:
-        if job.cancel_requested:
-            logger.info("pipeline cancelled (wrapped) for job %s", job.id)
-            _set(job, status="cancelled", stage="Cancelled")
-            if job_dir.is_dir():
-                shutil.rmtree(job_dir, ignore_errors=True)
-            registry_remove(job.id)
-            return
-        logger.exception("pipeline failed for job %s", job.id)
-        _set(job, status="error", stage=f"Error: {e}", error=str(e))
-        if job_dir.is_dir():
-            shutil.rmtree(job_dir, ignore_errors=True)
-        _record_stats(job, "error")
-        return
-    _set(job, status="done", progress=1.0, stage="Done")
-    _record_stats(job, "done")
-    save_job(job)

@@ -11,16 +11,12 @@ from typing import Annotated
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 
-from app.core.config import JOB_ID_RE, JOBS_DIR, STEM_NAMES
+from app.core.config import JOB_ID_RE, JOBS_DIR, STEMS
 from app.core.registry import dec_readers, get as registry_get, inc_readers
 
 router = APIRouter(tags=["stems"])
 
-# Stem files served by this endpoint: the 6 demucs stems + two
-# pipeline-produced extras. "original" is the re-encoded source song
-# (added when the user picked a strict subset), "mix" is the ffmpeg
-# amix of the user's selected stems.
-_ALLOWED_NAMES = frozenset(STEM_NAMES) | {"original", "mix"}
+_ALLOWED_NAMES = frozenset(STEMS)
 
 
 def _resolve_stem_path(job_id: str, name: str):
@@ -214,7 +210,7 @@ def download_all_stems(job_id: str) -> StreamingResponse:
     if not stems_dir.is_dir() or not stems_dir.is_relative_to(JOBS_DIR.resolve()):
         dec_readers(job_id)
         raise HTTPException(status_code=404, detail="stems not found")
-    wav_files = sorted(f for f in stems_dir.glob("*.wav") if f.stem in STEM_NAMES)
+    wav_files = sorted(f for f in stems_dir.glob("*.wav") if f.stem in STEMS)
     if not wav_files:
         dec_readers(job_id)
         raise HTTPException(status_code=404, detail="no stems found")

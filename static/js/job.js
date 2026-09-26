@@ -5,9 +5,6 @@ import {
   eventSource, setEventSource, setCurrentJobId, currentJobId,
 } from "./state.js";
 
-// Single supported separation pipeline. Sent on every job submit so the
-// API doesn't need to fall back on its own default.
-const BACKEND = "bsroformer";
 import { destroyPlayer } from "./player.js";
 import { wireUpAudio } from "./player.js";
 import { stagePhrases } from "./phrases.js";
@@ -336,7 +333,6 @@ export function wireJobForm() {
         if (!file) throw new Error("No file selected");
         const fd = new FormData();
         fd.append("file", file);
-        fd.append("backend", BACKEND);
         res = await fetch("/api/jobs/upload", { method: "POST", body: fd });
       } else {
         const postUrlText = document.getElementById("post-url-text");
@@ -344,7 +340,7 @@ export function wireJobForm() {
         res = await fetch("/api/jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: urlInput.value, backend: BACKEND }),
+          body: JSON.stringify({ url: urlInput.value }),
         });
       }
       const data = await res.json();

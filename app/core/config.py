@@ -41,13 +41,11 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 STATIC_DIR = ROOT / "static"
 JOB_ID_RE = re.compile(r"^[a-f0-9]{12}$")
 
-STEMS_6: tuple[str, ...] = ("vocals", "drums", "bass", "guitar", "piano", "other")
-STEMS_4: tuple[str, ...] = ("vocals", "drums", "bass", "other")
-STEM_NAMES = STEMS_6  # kept as alias; prefer STEMS_4/STEMS_6 for new code
+# BS-RoFormer gives vocals; Demucs htdemucs_ft splits the instrumental.
+STEMS: tuple[str, ...] = ("vocals", "drums", "bass", "other")
 
 # Runtime knobs -- env-backed so Docker / local can tune without a code edit.
 JOBS_DIR = _env_path("STEMDECK_JOBS_DIR", ROOT / "jobs")
-DEMUCS_MODEL = os.environ.get("STEMDECK_DEMUCS_MODEL", "htdemucs_6s").strip() or "htdemucs_6s"
 DEMUCS_DEVICE = _detect_device()
 MAX_DURATION_SEC = _env_int("STEMDECK_MAX_DURATION_SEC", 1200)  # 20 min default
 MAX_UPLOAD_BYTES = _env_int("STEMDECK_MAX_UPLOAD_BYTES", 500 * 1024 * 1024)  # 500 MB default
@@ -58,4 +56,3 @@ BSROFORMER_MODEL = (
     os.environ.get("STEMDECK_BSROFORMER_MODEL", "model_bs_roformer_ep_317_sdr_12.9755.ckpt").strip()
     or "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
 )
-DEFAULT_BACKEND = os.environ.get("STEMDECK_DEFAULT_BACKEND", "bsroformer").strip() or "bsroformer"
