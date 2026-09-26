@@ -286,6 +286,10 @@ function startMasterClock(mt, wsArr) {
   // Collect WebAudioPlayer instances. If any track isn't WebAudioPlayer
   // (e.g. a future change to use HTMLAudio), bail out and let the bundle
   // handle it -- our fix only works with the Web Audio backend.
+  // wsArr holds the stem tracks only: the bundle appends an invisible
+  // timeline track whose short placeholder buffer "ends" at once — driving
+  // it too left one player unpaused forever, so isPlaying() stayed true
+  // after the song ended.
   const els = wsArr.map(_mediaEl).filter(Boolean);
   if (!els.length || !els.every(_isWebAudioPlayer)) return;
 
@@ -296,12 +300,34 @@ function startMasterClock(mt, wsArr) {
   const originalSetTime = mt.setTime?.bind(mt);
   const originalPlay = mt.play?.bind(mt);
   const originalPause = mt.pause?.bind(mt);
+  const originalGetCurrentTime = mt.getCurrentTime?.bind(mt);
+
+  // The bundle's own position (mt.currentTime, its cursor) is normally moved
+  // by its startSync() loop, which only runs from the play() replaced below.
+  // Drive it from the master element instead, or getCurrentTime() and the
+  // cursor stay at 0 while the audio plays.
+  const syncBundlePosition = (t) => {
+    mt.currentTime = t;
+    mt.rendering?.updateCursor?.(t / (mt.maxDuration || 1), true);
+  };
+  const unsubscribeTime = wsArr[0].on?.("timeupdate", syncBundlePosition);
+  mt.getCurrentTime = () => els[0].currentTime;
+  // The Web Audio player emits no timeupdate while playing, so neither the
+  // transport UI (wireUpAudio's timeupdate handler) nor the position above
+  // would move. Tick it from the master element.
+  let tickId = 0;
+  const tick = () => {
+    if (!els[0].paused) wsArr[0].emit?.("timeupdate", els[0].currentTime);
+    tickId = requestAnimationFrame(tick);
+  };
+  tickId = requestAnimationFrame(tick);
 
   mt.setTime = (time) => {
     const wasPlaying = mt.isPlaying?.() ?? false;
     _clearLoopWrap();
     _atomicPauseAll(els);
     for (const el of els) el.playedDuration = time;
+    syncBundlePosition(time);
     if (wasPlaying) {
       _atomicResumeAll(els);
       _scheduleLoopWrap();
@@ -341,6 +367,9 @@ function startMasterClock(mt, wsArr) {
   };
 
   _masterClockCleanup = () => {
+    cancelAnimationFrame(tickId);
+    unsubscribeTime?.();
+    if (originalGetCurrentTime) mt.getCurrentTime = originalGetCurrentTime;
     if (originalSetTime) mt.setTime = originalSetTime;
     if (originalPlay) mt.play = originalPlay;
     if (originalPause) mt.pause = originalPause;
@@ -616,9 +645,9 @@ function startStemVuLoop(stems, decodedMap, token) {
 
 // Visuals reuse audio the multitrack bundle has already decoded instead of
 // fetching and decoding every stem a second time: the full-rate playback
-// buffer when tracks play through Web Audio (the bundle does that only on
-// iPhone/iPad), otherwise wavesurfer's own decode (8 kHz, what it draws the
-// lanes from) — desktop plays through <audio>, which has no buffer.
+// buffer of the Web Audio player (always used — see the patch note at the top
+// of vendor/multitrack.js), else wavesurfer's own decode if a track ever plays
+// through <audio>, which has no buffer.
 function decodedForVisuals(ws) {
   if (!ws) return Promise.resolve(null);
   const full = _mediaEl(ws)?.buffer;
@@ -878,7 +907,9 @@ export function wireUpAudio(jobId, stems, duration, thumbnail) {
     const wsArr = mt.wavesurfers || mt._wavesurfers;
     const ws = wsArr?.[0];
     if (!ws) return;
-    startMasterClock(mt, wsArr);
+    // Stem tracks only (ids 0..n-1), not the bundle's timeline track.
+    const stemWs = wsArr.filter((_, i) => mt.tracks?.[i]?.id < stems.length);
+    startMasterClock(mt, stemWs);
     renderAllDecodedVisuals(stems, wsArr, token);
     if (playBtn) playBtn.disabled = false;
     if (playMiniBtn) playMiniBtn.disabled = false;
