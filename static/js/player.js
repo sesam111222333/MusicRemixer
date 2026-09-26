@@ -106,7 +106,6 @@ function renderPlaceholderTracks() {
 const OVERVIEW_WAVE_POINTS = 1500;
 const STEM_VU_FPS = 30;
 let visualRenderToken = 0;
-let visualAudioContext = null;
 let stemVuRafId = null;
 
 // ─── Master clock sync ───
@@ -654,35 +653,25 @@ function startStemVuLoop(stems, decodedMap, token) {
   stemVuRafId = requestAnimationFrame(tick);
 }
 
-async function decodeStemForVisuals(stem) {
-  const AudioCtx = window.AudioContext || window.webkitAudioContext;
-  if (!AudioCtx) throw new Error("Web Audio is not available");
-  visualAudioContext ??= new AudioCtx();
-  const res = await fetch(stem.url, { cache: "force-cache" });
-  if (!res.ok) throw new Error(`Failed to fetch ${stem.name} stem: ${res.status}`);
-  const data = await res.arrayBuffer();
-  return visualAudioContext.decodeAudioData(data);
-}
-
-function renderAllDecodedVisuals(stems, token) {
+// Visuals read the playback buffers the multitrack bundle already decoded
+// (full sample rate, one per stem). Fetching and decoding the stems a second
+// time here doubled the download and the decoded-audio memory.
+function renderAllDecodedVisuals(stems, wsArr, token) {
+  if (token !== visualRenderToken) return;
   clearOverviewWaveforms();
   const decoded = new Map();
-  const promises = stems.map((stem) => {
-    const color = STEM_COLORS[stem.name] || "#a0a0a0";
-    return decodeStemForVisuals(stem)
-      .then((buf) => {
-        if (token !== visualRenderToken) return;
-        decoded.set(stem.name, buf);
-        renderDecodedStemVisuals(stem.name, buf, color);
-      })
-      .catch((err) => console.warn(`[visuals] ${stem.name}: ${err.message}`));
+  stems.forEach((stem, i) => {
+    const buf = _mediaEl(wsArr[i])?.buffer;
+    if (!isAudioBufferLike(buf)) {
+      console.warn(`[visuals] ${stem.name}: no decoded playback buffer`);
+      return;
+    }
+    decoded.set(stem.name, buf);
+    renderDecodedStemVisuals(stem.name, buf, STEM_COLORS[stem.name] || "#a0a0a0");
   });
-  Promise.all(promises).then(() => {
-    if (token !== visualRenderToken) return;
-    renderAllOverviewWaveforms(stems, decoded);
-    renderStemEnergyBaseline(stems, decoded);
-    startStemVuLoop(stems, decoded, token);
-  }).catch((err) => console.warn("[visuals] renderAllDecodedVisuals:", err));
+  renderAllOverviewWaveforms(stems, decoded);
+  renderStemEnergyBaseline(stems, decoded);
+  startStemVuLoop(stems, decoded, token);
 }
 
 export function destroyPlayer() {
@@ -771,25 +760,6 @@ export function renderEmptyShell() {
   setLaneControlsEnabled(false);
 }
 
-function renderAllMiniWaves(mt, stems) {
-  const wsArr = mt.wavesurfers || mt._wavesurfers;
-  if (!wsArr?.length) return;
-  stems.forEach((stem, i) => {
-    const ws = wsArr[i];
-    if (!ws) return;
-    const color = STEM_COLORS[stem.name] || "#a0a0a0";
-    const tryRender = () => {
-      const buf = ws.getDecodedData?.();
-      if (isAudioBufferLike(buf)) {
-        renderDecodedStemVisuals(stem.name, buf, color);
-        return true;
-      }
-      return false;
-    };
-    if (!tryRender()) ws.once?.("decode", tryRender);
-  });
-}
-
 export function wireUpAudio(jobId, stems, duration, thumbnail) {
   document.querySelector(".app")?.classList.remove("is-import");
   visualRenderToken += 1;
@@ -857,7 +827,6 @@ export function wireUpAudio(jobId, stems, duration, thumbnail) {
   }
 
   clearOverviewWaveforms();
-  renderAllDecodedVisuals(stems, token);
 
   // Disable play until canplay fires. Without the master clock installed,
   // the bundle's original mt.play() iterates audios[i]._play() sequentially
@@ -930,7 +899,6 @@ export function wireUpAudio(jobId, stems, duration, thumbnail) {
     applyMix();
     setLoopStart(totalDuration * LOOP_DEFAULT_START_FRAC);
     setLoopEnd(totalDuration * LOOP_DEFAULT_END_FRAC);
-    renderAllMiniWaves(mt, stems);
     applyWaveZoom();
 
     // CRITICAL: the Multitrack class itself does NOT emit play / pause /
@@ -941,6 +909,7 @@ export function wireUpAudio(jobId, stems, duration, thumbnail) {
     const ws = wsArr?.[0];
     if (!ws) return;
     startMasterClock(mt, wsArr);
+    renderAllDecodedVisuals(stems, wsArr, token);
     if (playBtn) playBtn.disabled = false;
     if (playMiniBtn) playMiniBtn.disabled = false;
 
