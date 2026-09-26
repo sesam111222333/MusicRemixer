@@ -16,10 +16,14 @@ logger = logging.getLogger("stemdeck.pipeline")
 
 _PCT_RE = re.compile(r"(\d{1,3})%")
 
+# Demucs prints one 0→100 % tqdm per model in a bag; htdemucs_ft is a bag of
+# four fine-tuned models (one per source). Used to keep progress monotonic.
+_MODELS_IN_BAG = {"htdemucs_ft": 4}
+
 
 def _run_demucs_on_file(job: Job, source: Path, out_dir: Path, model: str, progress_offset: float) -> Path:
     """Run demucs on *source*, write output to *out_dir*, report progress
-    scaled to the range [progress_offset, progress_offset + 0.5]."""
+    scaled to the range [progress_offset, 1.0]."""
     from app.pipeline.download import _set
 
     cmd = [
@@ -41,6 +45,9 @@ def _run_demucs_on_file(job: Job, source: Path, out_dir: Path, model: str, progr
 
     buf = ""
     tail: list[str] = []
+    passes = _MODELS_IN_BAG.get(model, 1)
+    pass_idx = 0
+    last_pct = -1
     try:
         if proc.stderr is None:
             raise RuntimeError("demucs subprocess has no stderr pipe")
@@ -59,8 +66,15 @@ def _run_demucs_on_file(job: Job, source: Path, out_dir: Path, model: str, progr
                 m = _PCT_RE.search(line)
                 if m:
                     pct = max(0, min(100, int(m.group(1))))
-                    stage_pct = progress_offset + pct / 200.0
-                    _set(job, progress=stage_pct, stage=f"Separating instruments {pct}%")
+                    if pct < last_pct:  # next model in the bag started
+                        pass_idx = min(pass_idx + 1, passes - 1)
+                    last_pct = pct
+                    done = (pass_idx + pct / 100.0) / passes
+                    _set(
+                        job,
+                        progress=progress_offset + done * (1.0 - progress_offset),
+                        stage=f"Separating instruments {int(done * 100)}%",
+                    )
                 else:
                     tail.append(line)
                     if len(tail) > 40:
