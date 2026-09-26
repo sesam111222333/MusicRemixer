@@ -312,12 +312,19 @@ function startMasterClock(mt, wsArr) {
   };
   const unsubscribeTime = wsArr[0].on?.("timeupdate", syncBundlePosition);
   mt.getCurrentTime = () => els[0].currentTime;
-  // The Web Audio player emits no timeupdate while playing, so neither the
-  // transport UI (wireUpAudio's timeupdate handler) nor the position above
-  // would move. Tick it from the master element.
+  // The Web Audio player emits no timeupdate while playing, and its play /
+  // pause never reach the wavesurfer, so neither the transport UI
+  // (wireUpAudio's handlers: time, playhead, play-button state) nor the
+  // position above would follow. Tick them from the master element.
   let tickId = 0;
+  let wasPlaying = false;
   const tick = () => {
-    if (!els[0].paused) wsArr[0].emit?.("timeupdate", els[0].currentTime);
+    const playing = !els[0].paused;
+    if (playing !== wasPlaying) {
+      wasPlaying = playing;
+      wsArr[0].emit?.(playing ? "play" : "pause");
+    }
+    if (playing) wsArr[0].emit?.("timeupdate", els[0].currentTime);
     tickId = requestAnimationFrame(tick);
   };
   tickId = requestAnimationFrame(tick);
@@ -328,6 +335,8 @@ function startMasterClock(mt, wsArr) {
     _atomicPauseAll(els);
     for (const el of els) el.playedDuration = time;
     syncBundlePosition(time);
+    // Seeks while paused must refresh the transport too (stop-button state).
+    wsArr[0].emit?.("seeking", time);
     if (wasPlaying) {
       _atomicResumeAll(els);
       _scheduleLoopWrap();
