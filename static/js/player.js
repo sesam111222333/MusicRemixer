@@ -614,17 +614,32 @@ function startStemVuLoop(stems, decodedMap, token) {
   stemVuRafId = requestAnimationFrame(tick);
 }
 
-// Visuals read the playback buffers the multitrack bundle already decoded
-// (full sample rate, one per stem). Fetching and decoding the stems a second
-// time here doubled the download and the decoded-audio memory.
-function renderAllDecodedVisuals(stems, wsArr, token) {
+// Visuals reuse audio the multitrack bundle has already decoded instead of
+// fetching and decoding every stem a second time: the full-rate playback
+// buffer when tracks play through Web Audio (the bundle does that only on
+// iPhone/iPad), otherwise wavesurfer's own decode (8 kHz, what it draws the
+// lanes from) — desktop plays through <audio>, which has no buffer.
+function decodedForVisuals(ws) {
+  if (!ws) return Promise.resolve(null);
+  const full = _mediaEl(ws)?.buffer;
+  if (isAudioBufferLike(full)) return Promise.resolve(full);
+  const decoded = ws.getDecodedData?.();
+  if (isAudioBufferLike(decoded)) return Promise.resolve(decoded);
+  return new Promise((resolve) => {
+    ws.once("decode", () => resolve(ws.getDecodedData?.() ?? null));
+    ws.once("error", () => resolve(null));
+  });
+}
+
+async function renderAllDecodedVisuals(stems, wsArr, token) {
+  const buffers = await Promise.all(stems.map((_, i) => decodedForVisuals(wsArr[i])));
   if (token !== visualRenderToken) return;
   clearOverviewWaveforms();
   const decoded = new Map();
   stems.forEach((stem, i) => {
-    const buf = _mediaEl(wsArr[i])?.buffer;
+    const buf = buffers[i];
     if (!isAudioBufferLike(buf)) {
-      console.warn(`[visuals] ${stem.name}: no decoded playback buffer`);
+      console.warn(`[visuals] ${stem.name}: no decoded audio`);
       return;
     }
     decoded.set(stem.name, buf);
