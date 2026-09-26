@@ -1,5 +1,5 @@
 import {
-  playBtn, loopBtn, multitrack, loopEnabled, loopStart, loopEnd,
+  playBtn, loopBtn, multitrack, loopEnabled, loopStart, loopEnd, totalDuration,
   setLoopStart, setLoopEnd,
 } from "./state.js";
 import { renderEmptyShell, rearmLoopWrap } from "./player.js";
@@ -28,9 +28,7 @@ document.addEventListener("keydown", (e) => {
     multitrack.setTime(Math.max(0, multitrack.getCurrentTime() - 5));
   } else if (e.code === "BracketRight") {
     e.preventDefault();
-    multitrack.setTime(
-      Math.min(multitrack.getDuration(), multitrack.getCurrentTime() + 5),
-    );
+    multitrack.setTime(Math.min(totalDuration, multitrack.getCurrentTime() + 5));
   } else if (e.code === "KeyL") {
     e.preventDefault();
     loopBtn.click();
