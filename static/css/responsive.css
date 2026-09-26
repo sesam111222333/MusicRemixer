@@ -1,308 +1,313 @@
-/* ───────────── Responsive ─────────────
- * Breakpoints:
- *   ≤1100px — laptop / portrait tablet: now-playing card reflows to 3-col
- *             with master spanning full width below transport.
- *   ≤900px  — landscape phone / small tablet: appbar wraps, lanes scroll
- *             horizontally with a sticky mixer column, master compresses.
- *   ≤640px  — phone: mixer column narrower, brand smaller, transport
- *             buttons full-width touch-friendly, master inline-compact.
- *   ≤480px  — small phone: tightest layout, art shrinks, paddings minimal.
- *   pointer:coarse — touch input regardless of screen size: bump
- *             interactive targets to a comfortable hit area.
+/* ───────────── Responsive layout ─────────────
+ * Rewritten 2026-09-26. The previous file targeted an older markup
+ * (np-master, lanes-body, import-card, stem-choice-row …) and never applied,
+ * so below ~1700px the now-playing row overflowed and phones got a clipped,
+ * unscrollable page.
+ *
+ *   all widths — fluid now-playing and studio columns (the fixed columns
+ *                summed to ~1680px).
+ *   ≤1180px    — now-playing wraps and the page scrolls; studio keeps its columns.
+ *   ≤900px     — the page scrolls instead of being a fixed-height studio;
+ *                mixer and wave editor stack; the transport sticks to the
+ *                bottom of the screen.
+ *   ≤560px     — phone: compact paddings, smaller transport buttons.
+ * Selectors carry `.app:not(.is-import)` to match the specificity of the
+ * studio rules in waves.css / transport.css / mixer.css.
  */
 
+.app:not(.is-import) .now-playing {
+  grid-template-columns:
+    clamp(92px, 9vw, 160px) minmax(240px, 1.15fr) minmax(190px, 1fr)
+    repeat(3, minmax(0, 0.75fr));
+}
+
+.app:not(.is-import) .stem-energy,
+.app:not(.is-import) .analysis-card {
+  min-width: 0;
+  padding: 0 clamp(10px, 1.4vw, 24px);
+  overflow: hidden;
+}
+
+.app:not(.is-import) .np-info {
+  padding: 0 clamp(12px, 1.6vw, 28px);
+}
+
+.app:not(.is-import) .np-play-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.app:not(.is-import) .studio-dashboard {
+  /* auto footer row: the mix/mixer buttons may wrap on narrower screens */
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-columns:
+    minmax(
+      clamp(300px, calc((var(--visible-track-count, 4) * 70px) + 112px), 650px),
+      clamp(320px, calc((var(--visible-track-count, 4) * 78px) + 128px), 720px)
+    )
+    minmax(0, 1fr);
+}
+
+/* The lane-icon overlay inherited min-height: 326px from the base panel
+   rule; on shorter screens the icons ran past the lanes they label. */
+.app:not(.is-import) .stems-panel {
+  min-height: 0;
+}
+
+.app:not(.is-import) .transport-left {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mixer-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mixer-tools button {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--glass-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #d8dde3;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mixer-tools button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.mixer-tools button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
 @media (max-width: 1100px) {
-  .import-card {
-    width: min(100%, 900px);
-  }
-  .stem-choice-row {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .stem-choice-row > span {
-    grid-column: 1 / -1;
-  }
   .appbar {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
-  .appbar-import-panel .import-input-row {
-    grid-template-columns: minmax(0, 1fr) minmax(144px, 180px);
+}
+
+/* Narrow or short screens: a fixed 100vh studio would squeeze the lanes to
+   a few pixels (7 px each at 1181×700), so the page scrolls instead and the
+   studio gets a fixed height. */
+@media (max-width: 1180px), (max-height: 820px) {
+  .app:not(.is-import) {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
   }
-  .appbar-import-panel .stem-choice-row {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .app:not(.is-import) .studio-dashboard {
+    flex: 0 0 auto;
+    height: auto;
+    grid-template-rows: 600px auto;
+    /* overflow: hidden (waves.css) would make this the sticky container */
+    overflow: visible;
   }
-  .appbar-import-panel .stem-choice-row > span {
-    grid-column: 1 / -1;
+  /* Keep play/stop on screen while the studio is scrolled into view. */
+  .app:not(.is-import) .transport-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 30;
   }
-  .feature-strip {
-    grid-template-columns: 1fr;
-    gap: 22px;
+}
+
+@media (max-width: 1180px) {
+  .app:not(.is-import) .zoom-tools > svg {
+    display: none;
   }
-  .feature-item + .feature-item {
+  .app:not(.is-import) .zoom-slider {
+    width: 90px;
+  }
+  .app:not(.is-import) .now-playing {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 12px 0;
+    min-height: 0;
+  }
+  .app:not(.is-import) .np-art {
+    flex: 0 0 96px;
+    width: 96px;
+    height: 96px;
+  }
+  .app:not(.is-import) .np-info {
+    flex: 1 1 320px;
+    border-right: 0;
+  }
+  .app:not(.is-import) .stem-energy,
+  .app:not(.is-import) .analysis-card {
+    flex: 1 1 170px;
+    min-height: 0;
+    padding-top: 10px;
+    border-top: 1px solid var(--glass-line);
+  }
+  .app:not(.is-import) .stem-energy {
+    flex-basis: 100%;
     border-left: 0;
-    border-top: 1px solid var(--gold-line);
-    padding-left: 0;
-    padding-top: 22px;
   }
-  .now-playing {
-    grid-template-columns: auto 1fr auto;
-    grid-template-areas:
-      "art info transport"
-      "art master master";
-    gap: 14px 16px;
-  }
-  .np-art { grid-area: art; }
-  .np-info { grid-area: info; }
-  .np-transport { grid-area: transport; }
-  .np-master { grid-area: master; }
 }
 
 @media (max-width: 900px) {
-  .app {
-    padding: 16px;
-    gap: 12px;
-  }
   .appbar {
-    gap: 12px;
-  }
-  .import-page {
-    padding: 54px 18px 20px;
-  }
-  .import-copy h2 {
-    font-size: 31px;
-  }
-  .import-card {
-    margin-top: 36px;
-    padding: 18px;
-  }
-  .import-input-row {
-    grid-template-columns: 1fr;
-  }
-  .appbar-import-panel {
-    padding: 16px;
+    padding: 14px;
   }
   .appbar-import-panel .import-input-row {
-    grid-template-columns: 1fr;
-    gap: 12px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding-bottom: 6px;
   }
-  .btn-primary {
-    width: 100%;
+  .source-mode-tabs {
+    flex-wrap: wrap;
   }
-  .brand-group {
-    flex: 1;
+  .app:not(.is-import) .wave-toolbar {
+    flex-wrap: wrap;
+    row-gap: 6px;
   }
-  .appbar-form {
-    order: 3;
-    width: 100%;
-    flex: none;
+  .app:not(.is-import) {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+    /* room for the fixed transport bar below */
+    padding: 12px 12px calc(var(--transport-h, 132px) + 16px);
   }
-  /* Compress the master section to recover vertical space — the full
-     140px panel makes the now-playing card too tall when stacked. */
-  .np-master {
-    height: 90px;
-    padding: 6px 8px;
+  .app:not(.is-import) .studio-dashboard {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    overflow: visible;
   }
-  /* Lane scrolling: mixer column stays put, waves scroll under it. */
-  .lanes-body,
-  .lanes-ruler {
-    overflow-x: auto;
+  .app:not(.is-import) .preview-panel {
+    height: 400px;
   }
-  .mixer-column,
-  .lanes-ruler-gutter {
-    position: sticky;
+  .app:not(.is-import) .mixer-column {
+    grid-template-columns: repeat(var(--visible-track-count, 4), minmax(0, 1fr));
+  }
+  /* The lane icons are an overlay on the wave editor's grid cell; in the
+     stacked layout they would float free — the mixer already names lanes. */
+  .app:not(.is-import) .stems-panel {
+    display: none;
+  }
+  .app:not(.is-import) .wave-editor {
+    height: 360px;
+    display: flex;
+    flex-direction: column;
+  }
+  .app:not(.is-import) .wave-toolbar {
+    height: auto;
+    justify-content: flex-start;
+  }
+  .app:not(.is-import) .wave-scroll {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+  }
+  /* Fixed, not sticky: sticky is bounded by .studio-dashboard, which starts
+     below the first screen on a phone, so play/stop would be out of reach. */
+  .app:not(.is-import) .transport-footer {
+    position: fixed;
     left: 0;
-    z-index: 4;
-    background: var(--panel);
-  }
-  /* Keep the waves area readable when scrolling — without a min-width
-     the waveform canvases collapse below ~250px and become unusable. */
-  .waves-column,
-  .lanes-ruler-time {
-    min-width: 480px;
-  }
-}
-
-@media (max-width: 640px) {
-  :root {
-    --header-w: 200px;
-  }
-  .brand {
-    font-size: 22px;
-  }
-  .brand-sub {
-    font-size: 12px;
-  }
-  .import-copy h2 {
-    font-size: 26px;
-  }
-  .import-copy p {
-    font-size: 15px;
-  }
-  .stem-choice-row {
-    grid-template-columns: 1fr 1fr;
-  }
-  .feature-strip {
-    padding: 22px;
-  }
-  .feature-item {
-    grid-template-columns: 52px 1fr;
-  }
-  .now-playing {
-    grid-template-columns: auto 1fr;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    border-width: 1px 0 0;
+    backdrop-filter: blur(10px);
+    grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
-      "art info"
-      "transport master";
-    gap: 12px;
-  }
-  /* Inline transport + master side-by-side rather than stacked, so the
-     card stays compact. Master is already compressed by the 900px rule. */
-  .np-master {
-    height: 80px;
-  }
-  .np-transport {
-    align-self: center;
-  }
-  .lane-mini-wave {
-    display: none; /* save horizontal space in the mixer column */
-  }
-  .np-title {
-    font-size: 14px;
-    -webkit-line-clamp: 3;
-  }
-}
-
-@media (max-width: 480px) {
-  :root {
-    --header-w: 180px;
-    --lane-h: 84px;
-  }
-  .app {
-    padding: 12px;
-    gap: 10px;
-  }
-  /* Single-column stem buttons; the 2-col grid still squeezes labels at
-     ~360px because each button needs the icon + text + 8px gap. */
-  .stem-choice-row {
-    grid-template-columns: 1fr;
-  }
-  .stem-choice {
-    min-height: 44px;
-  }
-  .feature-strip {
-    margin-top: 24px;
-  }
-  .privacy-note {
-    margin-top: 22px;
-    font-size: 13px;
-    text-align: center;
-  }
-  .now-playing {
-    padding: 10px 12px;
-    grid-template-columns: auto 1fr;
-    grid-template-areas:
-      "art info"
       "transport transport"
-      "master master";
-    gap: 10px;
+      "left right";
+    gap: 10px 12px;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    border-radius: 0;
   }
-  .np-art {
-    width: 56px;
-    height: 56px;
+  .app:not(.is-import) .transport-footer .np-transport {
+    grid-area: transport;
+    grid-column: auto;
+    gap: 14px;
   }
-  .np-art-play {
-    width: 28px;
-    height: 28px;
+  .app:not(.is-import) .transport-left {
+    grid-area: left;
+    grid-column: auto;
   }
-  .np-master {
+  .app:not(.is-import) .transport-right {
+    grid-area: right;
+    grid-column: auto;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 560px) {
+  .app:not(.is-import) .np-art {
+    flex-basis: 72px;
+    width: 72px;
     height: 72px;
   }
-  .np-transport {
-    flex-direction: row;
-    justify-content: space-between;
-    align-items: center;
+  .app:not(.is-import) .np-info {
+    flex-basis: 200px;
+    gap: 8px;
+    padding: 0 0 0 12px;
   }
-  .chip {
-    padding: 3px 8px;
-    font-size: 12px;
+  .app:not(.is-import) .np-title {
+    font-size: 16px;
   }
-  /* Drop the second chip column to one row of just the essentials */
-  .np-chips {
-    gap: 6px;
+  .app:not(.is-import) .analysis-card {
+    flex-basis: 100px;
+    border-left: 0;
   }
-  /* Mixer rows: tighten internal padding so M/S/knob/cloud fit. */
-  .lane-content {
-    padding: 8px 36px 8px 8px;
+  .app:not(.is-import) .preview-panel {
+    height: 360px;
   }
-  .lane-name {
-    font-size: 13px;
+  .app:not(.is-import) .btn-transport {
+    width: 48px;
+    height: 48px;
   }
-  /* Tighten lane VU on phone so the row stays readable. */
-  .lane-vu {
-    width: 18px;
-    right: 4px;
+  .app:not(.is-import) {
+    --transport-h: 112px;
   }
-  /* Keep waves usable — lower the min-width slightly on tiny screens. */
-  .waves-column,
-  .lanes-ruler-time {
-    min-width: 360px;
+  .app:not(.is-import) .transport-footer {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "transport right"
+      "left left";
+    gap: 8px;
+  }
+  .app:not(.is-import) .transport-footer .np-transport {
+    justify-self: start;
+    gap: 8px;
+    font-size: 11px;
+  }
+  .app:not(.is-import) .transport-left {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .app:not(.is-import) .mixer-tools {
+    flex-wrap: nowrap;
+  }
+  .app:not(.is-import) .btn-dl-mix,
+  .app:not(.is-import) .mixer-tools button {
+    height: 30px;
+    padding: 0 9px;
+    font-size: 11px;
+  }
+  .app:not(.is-import) .master-vol input[type="range"] {
+    width: 72px;
+  }
+  /* The now-playing card shows the same time; here they collide with master. */
+  .app:not(.is-import) .master-vol-label,
+  .app:not(.is-import) #footer-time-elapsed,
+  .app:not(.is-import) #footer-time-total {
+    display: none;
   }
 }
 
-/* Touch-input devices: enlarge interactive targets to ≥40px hit area
-   regardless of screen size. Desktop stays compact. */
 @media (pointer: coarse) {
-  .ms-btn {
-    width: 40px;
-    height: 40px;
-    font-size: 13px;
-  }
-  .lane-knob {
-    width: 40px;
-    height: 40px;
-  }
-  .lane-knob-indicator {
-    transform-origin: 50% 16px;
-    height: 11px;
-    top: 5px;
-  }
-  .lane-dl {
-    width: 36px;
-    height: 36px;
-  }
-  .btn-transport {
-    width: 44px;
-    height: 44px;
-  }
-  .avatar-btn {
-    width: 44px;
-    height: 44px;
-  }
-  /* Bigger master fader thumb so it's easier to grab. */
-  .master-fader::-webkit-slider-thumb {
-    width: 32px;
-    height: 18px;
-    margin-left: -14px;
-  }
-  .master-fader::-moz-range-thumb {
-    width: 32px;
-    height: 18px;
-  }
-}
-
-/* Landscape orientation on short screens (phones held sideways): the
-   now-playing card eats too much vertical space if it tries to stack.
-   Prefer a single horizontal row. */
-@media (max-height: 500px) and (orientation: landscape) {
-  .now-playing {
-    grid-template-columns: auto 1fr auto auto;
-    grid-template-areas: "art info transport master";
-    gap: 10px;
-    padding: 8px 12px;
-  }
-  .np-master {
-    height: 70px;
-  }
-  .np-art {
-    width: 56px;
-    height: 56px;
+  .app:not(.is-import) .ms-btn.lane-solo {
+    width: 28px;
+    height: 24px;
   }
 }
