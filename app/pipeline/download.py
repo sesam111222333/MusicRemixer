@@ -132,19 +132,6 @@ def download(job: Job, url: str, job_dir: Path) -> Path:
     url = normalize_youtube_url(url)
     _set(job, status="downloading", progress=0.0, stage="Processing...")
 
-    # Fetch metadata first (no download) so we can reject videos that are
-    # too long before wasting bandwidth and disk.
-    with YoutubeDL({"quiet": True, "noplaylist": True}) as ydl:
-        meta = ydl.extract_info(url, download=False) or {}
-    if meta.get("is_live"):
-        raise RuntimeError("Live streams cannot be processed")
-    duration = meta.get("duration")
-    if duration is None:
-        raise RuntimeError("Video duration is unknown -- cannot verify duration limit")
-    if duration > MAX_DURATION_SEC:
-        mins = MAX_DURATION_SEC // 60
-        raise RuntimeError(f"Video is {int(duration // 60)} min -- limit is {mins} min")
-
     def hook(d: dict) -> None:
         # yt-dlp calls this on each chunk; raising here aborts the download.
         # The runner unwraps yt-dlp's DownloadError and routes to JobCancelled.
@@ -158,9 +145,9 @@ def download(job: Job, url: str, job_dir: Path) -> Path:
         elif d.get("status") == "finished":
             _set(job, progress=1.0, stage="Download complete")
 
-    # No postprocessors -- Demucs reads the raw audio container (webm/m4a/opus/...)
-    # directly via torchaudio + ffmpeg. Skipping the WAV transcode saves the slowest
-    # part of the download pipeline and a lot of disk.
+    # No postprocessors -- the separator reads the raw audio container
+    # (webm/m4a/opus/...) directly via ffmpeg. Skipping the WAV transcode saves
+    # the slowest part of the download and a lot of disk.
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": str(job_dir / "source.%(ext)s"),
@@ -170,7 +157,19 @@ def download(job: Job, url: str, job_dir: Path) -> Path:
         "progress_hooks": [hook],
     }
     with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True) or {}
+        # Resolve metadata first (no download) so videos that are too long are
+        # rejected before wasting bandwidth and disk; then download from the
+        # same result instead of asking YouTube a second time.
+        meta = ydl.extract_info(url, download=False) or {}
+        if meta.get("is_live"):
+            raise RuntimeError("Live streams cannot be processed")
+        duration = meta.get("duration")
+        if duration is None:
+            raise RuntimeError("Video duration is unknown -- cannot verify duration limit")
+        if duration > MAX_DURATION_SEC:
+            mins = MAX_DURATION_SEC // 60
+            raise RuntimeError(f"Video is {int(duration // 60)} min -- limit is {mins} min")
+        info = ydl.process_ie_result(meta, download=True) or {}
 
     _set(
         job,
