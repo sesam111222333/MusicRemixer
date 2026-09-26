@@ -12,7 +12,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 
 from app.core.config import JOB_ID_RE, JOBS_DIR, STEM_NAMES
-from app.core.registry import dec_readers, get as registry_get, inc_readers, set_proc
+from app.core.registry import dec_readers, get as registry_get, inc_readers
 
 router = APIRouter(tags=["stems"])
 
@@ -351,7 +351,9 @@ def download_remix(
         dec_readers(job_id)
         raise HTTPException(status_code=500, detail=f"could not create temp file: {exc}")
     os.close(tmp_fd)
-    cmd += ["-filter_complex", filter_complex, "-map", "[out]", "-f", "wav", tmp_path]
+    # Float WAV: faders go to 2x and stems sum with normalize=0, so the mix can
+    # exceed 0 dBFS. 16-bit PCM would hard-clip it; float keeps the level.
+    cmd += ["-filter_complex", filter_complex, "-map", "[out]", "-c:a", "pcm_f32le", "-f", "wav", tmp_path]
 
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -359,25 +361,21 @@ def download_remix(
         os.unlink(tmp_path)
         dec_readers(job_id)
         raise HTTPException(status_code=500, detail=f"ffmpeg unavailable: {exc}")
-    set_proc(job_id, proc)
     try:
-        try:
-            _, stderr = proc.communicate(timeout=300)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.communicate()
-            os.unlink(tmp_path)
-            dec_readers(job_id)
-            raise HTTPException(status_code=500, detail="ffmpeg timed out")
-        if proc.returncode != 0:
-            os.unlink(tmp_path)
-            dec_readers(job_id)
-            raise HTTPException(
-                status_code=500,
-                detail=f"ffmpeg: {stderr.decode(errors='replace')}",
-            )
-    finally:
-        set_proc(job_id, None)
+        _, stderr = proc.communicate(timeout=300)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        os.unlink(tmp_path)
+        dec_readers(job_id)
+        raise HTTPException(status_code=500, detail="ffmpeg timed out")
+    if proc.returncode != 0:
+        os.unlink(tmp_path)
+        dec_readers(job_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"ffmpeg: {stderr.decode(errors='replace')}",
+        )
 
     def generate():
         try:

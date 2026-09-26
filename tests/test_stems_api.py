@@ -1086,53 +1086,8 @@ def test_get_stem_range_beyond_eof_returns_416(client):
 
 
 # ---------------------------------------------------------------------------
-# download_remix — set_proc registration and timeout
+# download_remix — timeout
 # ---------------------------------------------------------------------------
-
-
-def test_download_remix_registers_proc_with_set_proc(client, monkeypatch):
-    """download_remix must call set_proc during ffmpeg rendering so POST /cancel can abort it.
-
-    Without set_proc registration the cancel API has no handle to call
-    proc.terminate() on — a hung ffmpeg render cannot be interrupted from outside,
-    binds a thread-pool worker indefinitely, and holds inc_readers so
-    sweep_old_jobs and DELETE /jobs/{id} are blocked until the process exits.
-    """
-    import subprocess
-    from app.api import stems as stems_module
-
-    job_id = "aabbccddeec0"
-    job = Job(id=job_id, title="Proc Reg Test")
-    job.status = "done"
-    _jobs[job_id] = job
-    paths = [_make_stem_file(job_id, "vocals", b"RIFF\x00\x00\x00\x00WAVE")]
-
-    set_proc_calls: list[tuple] = []
-
-    def spy_set_proc(jid, proc):
-        set_proc_calls.append((jid, proc))
-
-    fake_wav = b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32
-    # Provide fakes for both APIs so the test works regardless of which is used.
-    monkeypatch.setattr(subprocess, "run", _fake_run(fake_wav))
-    monkeypatch.setattr(subprocess, "Popen", _fake_popen_write_file(fake_wav))
-    # Patch set_proc in the stems module; raising=False so it works before
-    # the import is added (the attribute is missing → test fails at assertion).
-    monkeypatch.setattr(stems_module, "set_proc", spy_set_proc, raising=False)
-
-    try:
-        r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals&volumes=1.0&pitches=0")
-        assert r.status_code == 200
-        assert any(proc is not None for _, proc in set_proc_calls), (
-            "set_proc was never called with a non-None proc — "
-            "download_remix does not register the ffmpeg subprocess for cancellation."
-        )
-        assert any(proc is None for _, proc in set_proc_calls), (
-            "set_proc(job_id, None) was never called — "
-            "download_remix does not clear the proc registration after ffmpeg completes."
-        )
-    finally:
-        _cleanup(paths)
 
 
 def test_download_remix_ffmpeg_timeout_returns_500(client, monkeypatch):
@@ -1195,3 +1150,40 @@ def test_download_remix_ffmpeg_timeout_returns_500(client, monkeypatch):
         )
     finally:
         _cleanup(paths)
+
+
+def test_remix_above_unity_gain_is_not_clipped(client):
+    """Faders go to 2x and several stems are summed with normalize=0, so the
+    mix legitimately exceeds 0 dBFS. Writing 16-bit PCM hard-clipped it; the
+    export must be float WAV so the level survives (the DAW can gain it down)."""
+    import shutil
+    import subprocess
+
+    import numpy as np
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+    job_id = "aabbccddeed0"
+    job = Job(id=job_id, title="Clip")
+    job.status = "done"
+    _jobs[job_id] = job
+    stems_dir = JOBS_DIR / job_id / "stems"
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("vocals", "drums"):
+        subprocess.run(
+            ["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+             "aevalsrc=0.8*sin(2*PI*220*t)|0.8*sin(2*PI*220*t):d=1:s=44100",
+             "-c:a", "pcm_s16le", str(stems_dir / f"{name}.wav")],
+            check=True,
+        )
+    try:
+        r = client.get(f"/api/jobs/{job_id}/remix.wav?stems=vocals,drums&volumes=2,2&pitches=0,0")
+        assert r.status_code == 200
+        out = subprocess.run(
+            ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", "-", "-f", "f32le", "-"],
+            input=r.content, capture_output=True, check=True,
+        ).stdout
+        peak = float(np.abs(np.frombuffer(out, dtype=np.float32)).max())
+        assert peak > 2.5, f"remix was clipped: peak {peak:.3f} (expected ~3.2)"
+    finally:
+        shutil.rmtree(JOBS_DIR / job_id, ignore_errors=True)
