@@ -18,7 +18,7 @@ from app.core.registry import get_proc as registry_get_proc
 from app.core.registry import register as registry_register
 from app.core.registry import remove as registry_remove
 from app.pipeline import run_pipeline
-from app.pipeline.download import InvalidYouTubeURL, validate_youtube_url
+from app.pipeline.download import InvalidYouTubeURL, _set, validate_youtube_url
 from app.pipeline.runner import run_pipeline_from_file
 
 router = APIRouter(tags=["jobs"])
@@ -137,13 +137,19 @@ def get_job(job_id: str) -> dict:
 
 
 @router.post("/{job_id}/cancel")
-def cancel_job(job_id: str) -> dict:
+async def cancel_job(job_id: str) -> dict:
+    # async on purpose: runs on the event loop, same as the runner's lock
+    # hand-off, so "queued" here reliably means "still waiting for the
+    # pipeline lock" and the job can be marked cancelled right away instead
+    # of when the running job releases the lock (minutes later).
     job = registry_get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if job.status in ("done", "error", "cancelled"):
         return job.to_state()
     job.cancel_requested = True
+    if job.status == "queued":
+        _set(job, status="cancelled", stage="Cancelled")
     proc = registry_get_proc(job_id)
     if proc is not None and proc.poll() is None:
         proc.terminate()

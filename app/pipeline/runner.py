@@ -99,6 +99,10 @@ async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
         except Exception:
             logger.debug("sweep_old_jobs failed (best-effort)", exc_info=True)
         async with _pipeline_lock:
+            # Leave "queued" in the same event-loop step that takes the lock:
+            # cancel_job treats "queued" as "not started" (see app/api/jobs.py).
+            _check_cancel(job)
+            _set(job, status="downloading", progress=0.0, stage="Processing...")
             await asyncio.to_thread(_run_blocking, job, url, job_dir)
     except JobCancelled:
         logger.info("pipeline cancelled for job %s", job.id)
@@ -196,6 +200,7 @@ async def run_pipeline_from_file(job: Job, source: Path, jobs_dir: Path) -> None
         except Exception:
             logger.debug("sweep_old_jobs failed (best-effort)", exc_info=True)
         async with _pipeline_lock:
+            _check_cancel(job)
             _set(job, status="analyzing", progress=0.0, stage="Analyzing...")
             await asyncio.to_thread(_run_blocking_from_file, job, source, job_dir)
     except JobCancelled:

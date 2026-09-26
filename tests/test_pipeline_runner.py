@@ -325,3 +325,42 @@ async def test_from_file_cancel_removes_job_from_registry(tmp_path: Path):
         assert job.id not in _jobs
     finally:
         _jobs.pop(job.id, None)
+
+
+@pytest.mark.asyncio
+async def test_cancel_of_queued_job_takes_effect_while_another_job_runs(tmp_path: Path):
+    """A job waiting for the pipeline lock must turn `cancelled` as soon as the
+    user cancels it — not minutes later when the running job releases the lock.
+    Before the fix it stayed `queued` (holding a MAX_PENDING slot) until then."""
+    import asyncio
+    import threading
+
+    from app.api.jobs import _pending_count, cancel_job
+    from app.core.registry import register
+
+    release_a = threading.Event()
+    ran = []
+
+    def blocking(job, url, job_dir):
+        ran.append(job.id)
+        if job.id == "aaaaaaaaaaa1":
+            release_a.wait(5)
+
+    a = register(Job(id="aaaaaaaaaaa1"))
+    b = register(Job(id="bbbbbbbbbbb1"))
+    with patch("app.pipeline.runner._run_blocking", side_effect=blocking):
+        ta = asyncio.create_task(run_pipeline(a, "u", tmp_path))
+        tb = asyncio.create_task(run_pipeline(b, "u", tmp_path))
+        await asyncio.sleep(0.2)
+        assert b.status == "queued"
+
+        await cancel_job(b.id)
+
+        assert b.status == "cancelled"
+        assert _pending_count() == 1  # only A still counts
+        release_a.set()
+        await asyncio.gather(ta, tb)
+
+    assert b.status == "cancelled"
+    assert ran == ["aaaaaaaaaaa1"]  # B never started
+    _jobs.pop(a.id, None)
