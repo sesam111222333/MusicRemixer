@@ -32,7 +32,8 @@ def _record_stats(job: Job, status: str) -> None:
         from app.core.stats import record_completion
         record_completion(job.id, job.title, status)
     except Exception:
-        pass  # stats are best-effort
+        # Stats must never fail a job, but a broken stats file should be seen.
+        logger.exception("recording job stats failed for job %s", job.id)
 
 
 def _check_cancel(job: Job) -> None:
@@ -97,7 +98,7 @@ async def run_pipeline(job: Job, url: str, jobs_dir: Path) -> None:
         try:
             await asyncio.to_thread(sweep_old_jobs, jobs_dir)
         except Exception:
-            logger.debug("sweep_old_jobs failed (best-effort)", exc_info=True)
+            logger.exception("sweep_old_jobs failed; old jobs are not being cleaned up")
         async with _pipeline_lock:
             # Leave "queued" in the same event-loop step that takes the lock:
             # cancel_job treats "queued" as "not started" (see app/api/jobs.py).
@@ -198,7 +199,7 @@ async def run_pipeline_from_file(job: Job, source: Path, jobs_dir: Path) -> None
         try:
             await asyncio.to_thread(sweep_old_jobs, jobs_dir)
         except Exception:
-            logger.debug("sweep_old_jobs failed (best-effort)", exc_info=True)
+            logger.exception("sweep_old_jobs failed; old jobs are not being cleaned up")
         async with _pipeline_lock:
             _check_cancel(job)
             _set(job, status="analyzing", progress=0.0, stage="Analyzing...")

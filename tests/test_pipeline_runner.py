@@ -364,3 +364,25 @@ async def test_cancel_of_queued_job_takes_effect_while_another_job_runs(tmp_path
     assert b.status == "cancelled"
     assert ran == ["aaaaaaaaaaa1"]  # B never started
     _jobs.pop(a.id, None)
+
+
+@pytest.mark.asyncio
+async def test_sweep_and_stats_failures_are_logged_visibly(tmp_path: Path, caplog):
+    """A failing sweep must not fail the job, but it must show up in the
+    journal: the service logs at INFO, so a debug-level record (as before)
+    meant a sweep that kept failing filled the disk silently. Same for the
+    job-stats write."""
+    import logging
+
+    job = Job(id="sweeplog_0001")
+    caplog.set_level(logging.INFO, logger="stemdeck")
+
+    with patch("app.pipeline.runner.sweep_old_jobs", side_effect=PermissionError("nope")), \
+         patch("app.pipeline.runner._run_blocking", return_value=None), \
+         patch("app.core.stats.record_completion", side_effect=OSError("disk full")):
+        await run_pipeline(job, "https://www.youtube.com/watch?v=dQw4w9WgXcQ", tmp_path)
+
+    assert job.status == "done"
+    msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("sweep_old_jobs failed" in m for m in msgs), msgs
+    assert any("stats" in m for m in msgs), msgs
