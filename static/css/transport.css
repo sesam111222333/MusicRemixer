@@ -123,9 +123,7 @@
 .stem-choice.vocals { color: #ff3f46; border-color: rgba(255, 63, 70, 0.28); }
 .stem-choice.drums { color: #ff7a1a; border-color: rgba(255, 122, 26, 0.24); }
 .stem-choice.bass { color: #ffd04d; border-color: rgba(255, 208, 77, 0.24); }
-.stem-choice.guitar { color: #3fc952; border-color: rgba(63, 201, 82, 0.24); }
-.stem-choice.piano { color: #974cff; border-color: rgba(151, 76, 255, 0.24); }
-.stem-choice.other { color: #3695ff; border-color: rgba(54, 149, 255, 0.24); }
+.stem-choice.stem-choice.stem-choice.other { color: #3695ff; border-color: rgba(54, 149, 255, 0.24); }
 
 .privacy-note {
   display: inline-flex;
@@ -448,10 +446,7 @@
 .vocals { --stem-color: #e54249; color: var(--stem-color); }
 .drums { --stem-color: #f06a14; color: var(--stem-color); }
 .bass { --stem-color: #eab414; color: var(--stem-color); }
-.guitar { --stem-color: #5bbf50; color: var(--stem-color); }
-.piano { --stem-color: #7f45d8; color: var(--stem-color); }
 .other { --stem-color: #3e8dcf; color: var(--stem-color); }
-.original { --stem-color: #a8b0bd; color: var(--stem-color); }
 
 .analysis-card {
   display: flex;

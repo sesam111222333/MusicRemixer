@@ -456,7 +456,7 @@
   transform-origin: bottom;
   /* Short transition so the meter still reads as fluid rather than
      stepwise, but quick enough that drum-hit transients aren't washed
-     out. The peak-hold logic in audio.js does the real "VU feel". */
+     out. The peak-hold logic in startStemVuLoop (player.js) does the real "VU feel". */
   transition: transform 30ms linear;
   pointer-events: none;
 }

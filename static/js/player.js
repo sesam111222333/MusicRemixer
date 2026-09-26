@@ -1,7 +1,7 @@
 import Multitrack from "/vendor/multitrack.js";
 import { fmtTime } from "./utils.js";
 import {
-  STEM_NAMES, TRACK_NAMES, STEM_COLORS, PROGRESS_COLOR,
+  STEM_NAMES, STEM_COLORS, PROGRESS_COLOR,
   LOOP_DEFAULT_START_FRAC, LOOP_DEFAULT_END_FRAC,
 } from "./constants.js";
 import {
@@ -9,7 +9,7 @@ import {
   titleEl, npThumb, rulerTime, wavesGrid, playBtn, playMiniBtn,
   stopBtn, loopBtn, loopRegionEl,
   multitrack, currentJobId, trackIndex, totalDuration, loopEnabled,
-  loopStart, loopEnd, trackAnalysers,
+  loopStart, loopEnd,
   masterVolume, masterFader, mixerState,
   setMultitrack, setCurrentJobId, setTrackIndex, setTotalDuration,
   setLoopEnabled, setLoopStart, setLoopEnd, setMasterVolume,
@@ -26,20 +26,9 @@ import {
   applyWaveZoom, buildPresenceRuler, updateFooterTimes,
   updatePresencePlayhead,
 } from "./transport.js";
-import { stopVuLoop } from "./audio.js";
 
-// Wire master volume slider once at module load — affects playback only, not downloads.
-if (masterFader) {
-  masterFader.addEventListener("input", () => {
-    setMasterVolume(parseFloat(masterFader.value));
-    applyMix();
-  });
-}
-
-// Stem-selection filter: the import-page stem-choice toggles set
-// selectedStems (state.js). Backend always processes all 6 -- we
-// hide the rows for unselected stems in the studio dashboard so the
-// user "only sees what they selected to extract".
+// Rows for stems the job did not return are hidden (e.g. a stem the
+// separator failed to produce).
 const _STEM_ROW_SELECTORS = [
   ".mixer-column .lane-header[data-stem]",
   ".stem-list span[data-stem]",
@@ -50,7 +39,7 @@ const _STEM_ROW_SELECTORS = [
 ];
 
 function applyStemSelectionFilter(presentNames) {
-  const visibleTrackCount = Math.max(1, presentNames.size || TRACK_NAMES.length);
+  const visibleTrackCount = Math.max(1, presentNames.size || STEM_NAMES.length);
   document.querySelector(".app")?.style.setProperty("--visible-track-count", String(visibleTrackCount));
   for (const sel of _STEM_ROW_SELECTORS) {
     for (const el of document.querySelectorAll(sel)) {
@@ -62,7 +51,7 @@ function applyStemSelectionFilter(presentNames) {
 }
 
 function clearStemSelectionFilter() {
-  document.querySelector(".app")?.style.setProperty("--visible-track-count", String(TRACK_NAMES.length));
+  document.querySelector(".app")?.style.setProperty("--visible-track-count", String(STEM_NAMES.length));
   for (const sel of _STEM_ROW_SELECTORS) {
     for (const el of document.querySelectorAll(sel)) {
       el.classList.remove("hidden");
@@ -94,7 +83,7 @@ function resetAnalysisCards() {
 
 function renderPlaceholderTracks() {
   multitrackContainer.innerHTML = "";
-  for (const name of TRACK_NAMES) {
+  for (const name of STEM_NAMES) {
     const ph = document.createElement("div");
     ph.className = "lane-placeholder";
     ph.dataset.stem = name;
@@ -433,34 +422,6 @@ function minMaxWaveformPath(peaks, norm) {
   return `${top.join(" ")} ${bottom.join(" ")} Z`;
 }
 
-// Mixer-column mini-wave keeps a per-stem normalized envelope (each
-// thumbnail fills its own little box). Used by mixer.js indirectly via
-// renderRealMiniWave, which has its own peak computation.
-function bufferPeaks(audioBuffer, count) {
-  const peaks = bufferMinMaxPeaks(audioBuffer, count);
-  let max = 0;
-  for (const [mn, mx] of peaks) {
-    if (mx > max) max = mx;
-    if (-mn > max) max = -mn;
-  }
-  const norm = max > 0 ? 1 / max : 0;
-  return peaks.map(([mn, mx]) => Math.max(Math.min(1, mx * norm), -mn * norm));
-}
-
-function waveformPath(peaks) {
-  const top = peaks.map((amp, i) => {
-    const x = (i / (peaks.length - 1)) * 100;
-    const y = 24 - amp * 21;
-    return `${i === 0 ? "M" : "L"}${x.toFixed(3)} ${y.toFixed(3)}`;
-  });
-  const bottom = [...peaks].reverse().map((amp, i) => {
-    const x = ((peaks.length - 1 - i) / (peaks.length - 1)) * 100;
-    const y = 24 + amp * 21;
-    return `L${x.toFixed(3)} ${y.toFixed(3)}`;
-  });
-  return `${top.join(" ")} ${bottom.join(" ")} Z`;
-}
-
 function renderOverviewWaveformPath(stemName, peaks, norm, color) {
   const layer = ensureOverviewWaveformLayer();
   let row = layer.querySelector(`[data-stem="${stemName}"]`);
@@ -471,7 +432,7 @@ function renderOverviewWaveformPath(stemName, peaks, norm, color) {
     layer.appendChild(row);
   }
   row.style.setProperty("--stem-color", color);
-  row.style.order = String(TRACK_NAMES.indexOf(stemName));
+  row.style.order = String(STEM_NAMES.indexOf(stemName));
   row.innerHTML = `
     <svg class="stem-waveform-svg" viewBox="0 0 100 48" preserveAspectRatio="none" aria-hidden="true">
       <path d="${minMaxWaveformPath(peaks, norm)}"></path>
@@ -513,11 +474,11 @@ function renderDecodedStemVisuals(stemName, audioBuffer, color) {
 
 // Set the song-level "Stem Energy" panel from each stem's overall RMS.
 // Without this baseline the bars sit at 0% until the user hits play
-// (because audio.js only writes per-frame during active playback) and
+// (because the VU loop only writes per-frame during active playback) and
 // look like static placeholders. Normalizing all stems to the loudest
 // one's RMS gives a meaningful relative balance ("drums dominate, piano
 // quiet"), which is what a DAW-style energy panel is supposed to show.
-// Once playback starts, audio.js's per-frame writes override these
+// Once playback starts, the VU loop's per-frame writes override these
 // baseline values for real-time pulsing.
 function renderStemEnergyBaseline(stems, decodedMap) {
   const rmsByStem = new Map();
@@ -581,7 +542,7 @@ function buildStemVuEnvelope(audioBuffer) {
 function stemVuGain(stemName) {
   const state = mixerState[stemName];
   if (!state) return 0;
-  const anySolo = TRACK_NAMES.some((name) => trackIndex[name] !== undefined && mixerState[name]?.soloed);
+  const anySolo = STEM_NAMES.some((name) => trackIndex[name] !== undefined && mixerState[name]?.soloed);
   if (state.muted || (anySolo && !state.soloed)) return 0;
   return Math.max(0, state.volume);
 }
@@ -676,7 +637,6 @@ function renderAllDecodedVisuals(stems, wsArr, token) {
 
 export function destroyPlayer() {
   document.querySelector(".app")?.classList.remove("is-import");
-  stopVuLoop();
   stopStemVuLoop();
   stopMasterClock();
   if (multitrack) {
@@ -714,7 +674,6 @@ export function destroyPlayer() {
   timeEl.textContent = "00:00 / 00:00";
   resetAnalysisCards();
 
-  trackAnalysers.length = 0;
   for (const row of document.querySelectorAll(".energy-row")) {
     const bar = row.querySelector("b");
     const txt = row.querySelector("em");
@@ -744,7 +703,7 @@ export function renderEmptyShell() {
   stopStemVuLoop();
   ensureMixerStateDefaults();
   mixerEl.innerHTML = "";
-  for (const name of TRACK_NAMES) {
+  for (const name of STEM_NAMES) {
     const { row } = renderMixerRow({ name, url: "#" });
     mixerEl.appendChild(row);
   }
@@ -770,11 +729,7 @@ export function wireUpAudio(jobId, stems, duration, thumbnail) {
   refreshMixerVisuals();
   setLaneControlsEnabled(true);
 
-  // User-selected stems only. Backend produced all 6, but the import-
-  // The backend produces all 4 stems, no client-side filtering needed.
-  // applyStemSelectionFilter still runs to hide the "original" mixer row
-  // (synthetic original.wav is no longer produced now that there's no
-  // stem-subset selector).
+  // Hide rows for any stem the backend did not return.
   applyStemSelectionFilter(new Set(stems.map((s) => s.name)));
 
   for (const stem of stems) {

@@ -74,11 +74,7 @@ export let loopStart = 0;
 export let loopEnd = 0;
 export let waveZoom = 1;
 
-// Web Audio analysers for live VU meters.
-export let audioContext = null;
 export let masterVolume = 0.5; // mirrored from masterFader.value
-export const trackAnalysers = []; // index → { analyser, data, vuEl }
-export let vuRafId = null;
 
 // ─── Setter helpers for mutable state (so other modules can update) ───
 
@@ -91,6 +87,4 @@ export function setLoopEnabled(v) { loopEnabled = v; }
 export function setLoopStart(v) { loopStart = v; }
 export function setLoopEnd(v) { loopEnd = v; }
 export function setWaveZoom(v) { waveZoom = v; }
-export function setAudioContext(v) { audioContext = v; }
 export function setMasterVolume(v) { masterVolume = v; }
-export function setVuRafId(v) { vuRafId = v; }

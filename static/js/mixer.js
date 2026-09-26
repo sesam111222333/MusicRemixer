@@ -1,5 +1,5 @@
 import {
-  STEM_NAMES, TRACK_NAMES, STEM_COLORS, STEM_DISPLAY, LANE_VOLUME_MAX,
+  STEM_NAMES, STEM_COLORS, STEM_DISPLAY, LANE_VOLUME_MAX,
 } from "./constants.js";
 import {
   mixerState, mixerEl, stemListEl, currentJobId, multitrack, trackIndex,
@@ -12,7 +12,7 @@ function defaultMixerEntry() {
 }
 
 export function ensureMixerStateDefaults() {
-  for (const name of TRACK_NAMES) {
+  for (const name of STEM_NAMES) {
     if (!mixerState[name]) mixerState[name] = defaultMixerEntry();
   }
 }
@@ -23,13 +23,13 @@ export function loadMixIntoState(jobId) {
     const raw = localStorage.getItem(`stemdeck:mix:${jobId}`);
     if (raw) stored = JSON.parse(raw);
   } catch { /* ignore */ }
-  for (const name of TRACK_NAMES) {
+  for (const name of STEM_NAMES) {
     Object.assign(mixerState[name], defaultMixerEntry(), stored[name] || {});
   }
 }
 
 export function resetMixerState() {
-  for (const name of TRACK_NAMES) {
+  for (const name of STEM_NAMES) {
     Object.assign(mixerState[name], defaultMixerEntry());
   }
 }
@@ -52,8 +52,8 @@ function saveMix() {
 // real pitch shifter (e.g. an AudioWorklet); until then the UI says "export".
 export function applyMix() {
   if (!multitrack) return;
-  const anySolo = TRACK_NAMES.some((name) => trackIndex[name] !== undefined && mixerState[name]?.soloed);
-  for (const name of TRACK_NAMES) {
+  const anySolo = STEM_NAMES.some((name) => trackIndex[name] !== undefined && mixerState[name]?.soloed);
+  for (const name of STEM_NAMES) {
     const s = mixerState[name];
     if (!s) continue;
     let effective = s.volume;
@@ -86,7 +86,7 @@ export function setLaneVolume(name, v) {
 }
 
 export function refreshMixerVisuals() {
-  for (const name of TRACK_NAMES) {
+  for (const name of STEM_NAMES) {
     const state = mixerState[name];
     if (!state) continue;
     // Mixer-column lane header
@@ -123,7 +123,7 @@ export function refreshMixerVisuals() {
         }
         if (mon) {
           // Active when this stem is THE lone solo (the "monitor" target).
-          const others = TRACK_NAMES.filter((n) => n !== name);
+          const others = STEM_NAMES.filter((n) => n !== name);
           const lone = state.soloed
             && others.every((n) => !mixerState[n]?.soloed);
           mon.classList.toggle("active", lone);
@@ -139,7 +139,7 @@ export function refreshMixerVisuals() {
 export function exportSession() {
   if (!currentJobId) return;
   const stems = {};
-  for (const name of TRACK_NAMES) {
+  for (const name of STEM_NAMES) {
     if (mixerState[name]) stems[name] = { ...mixerState[name] };
   }
   const data = {
@@ -184,7 +184,7 @@ export async function importSession(file) {
 
   // If this job is currently open, apply state immediately.
   if (currentJobId === data.job_id) {
-    for (const name of TRACK_NAMES) {
+    for (const name of STEM_NAMES) {
       if (!mixerState[name]) mixerState[name] = defaultMixerEntry();
       Object.assign(mixerState[name], defaultMixerEntry(), data.stems[name] || {});
     }
@@ -450,10 +450,7 @@ function stemIconMarkup(stemName) {
     vocals: `<svg ${common}><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><path d="M12 19v3"></path></svg>`,
     drums: `<svg ${common}><path d="M7 13.5a5 5 0 0 0 10 0"></path><path d="M7 13.5h10"></path><circle cx="9" cy="10" r="2.5"></circle><circle cx="15" cy="10" r="2.5"></circle><path d="M4 6.5h5"></path><path d="M15 6.5h5"></path><path d="M6.5 6.5v5"></path><path d="M17.5 6.5v5"></path><path d="M10 18l-2 3"></path><path d="M14 18l2 3"></path><path d="M4 18l16-8"></path></svg>`,
     bass: `<svg ${common}><path d="M16.5 3h4v5h-3"></path><path d="M17.5 5.5 9.8 13.2"></path><path d="M10 13c1.6 2.2 1.1 5.1-1.2 6.5-2.1 1.3-5 .5-6-1.6-.9-1.9-.1-4.1 1.8-5 .9-.4 1.8-.4 2.8-.1.1-1.1.6-2.1 1.6-2.6 1.2-.6 2.6-.1 3.2 1.1"></path><path d="M6.7 16.4h.01"></path><path d="M13.5 9.5l3 3"></path><path d="M18.2 3v4.6"></path><path d="M20.5 3v4"></path></svg>`,
-    guitar: `<svg ${common}><path d="M16 4.5 20 2l2 2-2.5 4"></path><path d="M18.2 5.8 10.2 13.8"></path><path d="M10.5 13.5c1.1 1.7.5 4.2-1.5 5.5-2.2 1.5-5.3.8-6.3-1.3-.8-1.7.1-3.6 1.9-4.2 1-.3 1.8-.1 2.7.5.1-1.1.6-2.1 1.6-2.6 1.4-.7 2.7.2 1.6 2.1Z"></path><path d="M6.5 15.1c1.3.6 2.2 1.5 2.9 2.8"></path><circle cx="7" cy="16.4" r="1.4"></circle><path d="M14 8l3 3"></path></svg>`,
-    piano: `<svg ${common}><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M7 5v14"></path><path d="M12 5v14"></path><path d="M17 5v14"></path><path d="M9.5 5v7"></path><path d="M14.5 5v7"></path></svg>`,
     other: `<svg ${common}><path d="M4 13v-2"></path><path d="M8 17V7"></path><path d="M12 21V3"></path><path d="M16 17V7"></path><path d="M20 13v-2"></path></svg>`,
-    original: `<svg ${common}><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`,
   };
   return icons[stemName] || icons.other;
 }
@@ -546,12 +543,12 @@ export function toggleStemSolo(name) {
 export function soloOnlyStem(name) {
   const state = mixerState[name];
   if (!state) return;
-  const others = TRACK_NAMES.filter((n) => n !== name);
+  const others = STEM_NAMES.filter((n) => n !== name);
   const isAlreadyAlone = state.soloed && others.every((n) => !mixerState[n]?.soloed);
   if (isAlreadyAlone) {
     state.soloed = false;
   } else {
-    for (const n of TRACK_NAMES) {
+    for (const n of STEM_NAMES) {
       if (!mixerState[n]) continue;
       mixerState[n].soloed = (n === name);
     }
@@ -563,7 +560,7 @@ export function soloOnlyStem(name) {
 }
 
 export function resetMixer() {
-  for (const name of TRACK_NAMES) {
+  for (const name of STEM_NAMES) {
     const s = mixerState[name];
     if (!s) continue;
     s.volume = 1;
@@ -578,8 +575,8 @@ export function resetMixer() {
 
 export function muteAll() {
   // Toggle: if every stem is muted, un-mute all; otherwise mute all.
-  const allMuted = TRACK_NAMES.every((n) => mixerState[n]?.muted);
-  for (const name of TRACK_NAMES) {
+  const allMuted = STEM_NAMES.every((n) => mixerState[n]?.muted);
+  for (const name of STEM_NAMES) {
     const s = mixerState[name];
     if (!s) continue;
     s.muted = !allMuted;
@@ -590,7 +587,7 @@ export function muteAll() {
 }
 
 export function clearAllSolos() {
-  for (const name of TRACK_NAMES) {
+  for (const name of STEM_NAMES) {
     const s = mixerState[name];
     if (!s) continue;
     s.soloed = false;

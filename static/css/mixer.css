@@ -20,10 +20,7 @@
 .lane-header[data-stem="vocals"] { --stem-color: #e54249; }
 .lane-header[data-stem="drums"] { --stem-color: #f06a14; }
 .lane-header[data-stem="bass"] { --stem-color: #eab414; }
-.lane-header[data-stem="guitar"] { --stem-color: #5bbf50; }
-.lane-header[data-stem="piano"] { --stem-color: #7f45d8; }
 .lane-header[data-stem="other"] { --stem-color: #3e8dcf; }
-.lane-header[data-stem="original"] { --stem-color: #a8b0bd; }
 
 .lane-header + .lane-header {
   border-left: 1px solid var(--glass-line);
