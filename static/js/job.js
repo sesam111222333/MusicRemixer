@@ -15,7 +15,6 @@ import { stagePhrases } from "./phrases.js";
 const ROTATION_MS = 2500;
 let phraseTimerId = null;
 let lastStatus = null;
-let jobPollTimerId = null;
 const renderedJobs = new Set();
 
 const TERMINAL_STATUSES = new Set(["done", "error", "cancelled"]);
@@ -48,13 +47,6 @@ function stopPhraseRotation() {
   }
 }
 
-function stopJobPolling() {
-  if (jobPollTimerId) {
-    clearInterval(jobPollTimerId);
-    jobPollTimerId = null;
-  }
-}
-
 export function showError(message) {
   errorEl.textContent = "";
   const msg = document.createElement("div");
@@ -82,7 +74,6 @@ export function reset() {
     eventSource.close();
     setEventSource(null);
   }
-  stopJobPolling();
   stopPhraseRotation();
   lastStatus = null;
   destroyPlayer();
@@ -148,18 +139,15 @@ function applyState(state) {
   }
 
   if (state.status === "error") {
-    stopJobPolling();
-    // The error box says it; the job box would repeat "Error: ..." beside it.
+      // The error box says it; the job box would repeat "Error: ..." beside it.
     jobBox.classList.add("hidden");
     showError(state.error || "Unknown error");
     setSubmitProcessing(false);
   } else if (state.status === "cancelled") {
-    stopJobPolling();
-    jobBox.classList.add("hidden");
+      jobBox.classList.add("hidden");
     setSubmitProcessing(false);
   } else if (state.status === "done") {
-    stopJobPolling();
-    jobBox.classList.add("hidden");
+      jobBox.classList.add("hidden");
     if (!renderedJobs.has(state.job_id)) {
       renderedJobs.add(state.job_id);
       wireUpAudio(
@@ -182,20 +170,6 @@ async function probeJob(jobId) {
   const s = await r.json();
   applyState(s);
   return s;
-}
-
-function startJobPolling(jobId) {
-  stopJobPolling();
-  const tick = async () => {
-    try {
-      const s = await probeJob(jobId);
-      if (TERMINAL_STATUSES.has(s.status)) stopJobPolling();
-    } catch (err) {
-      console.warn("[job] REST fallback failed:", err);
-    }
-  };
-  tick();
-  jobPollTimerId = setInterval(tick, 1000);
 }
 
 // Connect (or reconnect) to the SSE stream for a job. On unexpected
@@ -360,7 +334,6 @@ export function wireJobForm() {
     startPhraseRotation("queued");
     lastStatus = "queued";
 
-    startJobPolling(jobId);
     connectEvents(jobId);
   });
 }
