@@ -69,8 +69,12 @@ export function showError(message) {
   retry.textContent = "Try again";
   retry.addEventListener("click", () => {
     errorEl.classList.add("hidden");
-    urlInput.focus();
-    urlInput.select();
+    if (sourceMode === "file") {
+      fileInput?.click();
+    } else {
+      urlInput.focus();
+      urlInput.select();
+    }
   });
   errorEl.append(msg, retry);
   errorEl.classList.remove("hidden");
