@@ -6,7 +6,9 @@ requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
-    "yt-dlp>=2024.12.0",
+    # [default] pulls yt-dlp-ejs, which solves YouTube's JS challenges with
+    # the node runtime set in download.py; without it downloads get 403.
+    "yt-dlp[default]>=2026.08.19",
     "demucs>=4.0.1",
     # Pin torch/torchaudio to 2.6.x — torchaudio 2.7+ removed its built-in
     # audio writer and now requires the separate `torchcodec` package, which

@@ -155,6 +155,10 @@ def download(job: Job, url: str, job_dir: Path) -> Path:
         "noprogress": True,
         "noplaylist": True,
         "progress_hooks": [hook],
+        # YouTube answers the media request with 403 unless yt-dlp can solve
+        # its JS challenges (needs yt-dlp-ejs + a runtime; deno is the default,
+        # node is what the server has).
+        "js_runtimes": {"node": {}},
     }
     with YoutubeDL(ydl_opts) as ydl:
         # Resolve metadata first (no download) so videos that are too long are

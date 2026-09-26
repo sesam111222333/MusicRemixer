@@ -33,3 +33,18 @@ def test_unknown_duration_is_rejected(tmp_path):
     with _patch_ydl({"is_live": False, "duration": None}):
         with pytest.raises(RuntimeError, match="[Dd]uration"):
             download(_make_job(), "https://www.youtube.com/watch?v=dQw4w9WgXcQ", tmp_path)
+
+
+def test_youtube_download_uses_a_js_runtime(tmp_path):
+    """Without a JS runtime YouTube answers the media request with 403
+    ("unable to download video data: HTTP Error 403: Forbidden" for
+    OjbutQzWZp8, 2026-09-26) — yt-dlp needs one to solve its challenges.
+    node is installed on the server; deno (yt-dlp's default) is not."""
+    meta = {"duration": 60, "is_live": False, "title": "t"}
+    with _patch_ydl(meta) as mock_cls:
+        try:
+            download(_make_job(), "https://www.youtube.com/watch?v=jNQXAC9IVRw", tmp_path)
+        except RuntimeError:
+            pass  # no source file is produced by the mock
+    opts = mock_cls.call_args.args[0]
+    assert opts.get("js_runtimes") == {"node": {}}
