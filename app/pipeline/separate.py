@@ -21,6 +21,32 @@ _PCT_RE = re.compile(r"(\d{1,3})%")
 _MODELS_IN_BAG = {"htdemucs_ft": 4}
 
 
+def _read_progress(stream, on_pct) -> list[str]:
+    """Read a subprocess's stderr char by char (tqdm redraws its bar with \\r),
+    call on_pct(pct) for every progress line and return the last 40 other
+    lines for error messages."""
+    buf = ""
+    tail: list[str] = []
+    while True:
+        ch = stream.read(1)
+        if not ch:
+            return tail
+        if ch not in ("\r", "\n"):
+            buf += ch
+            continue
+        line = buf.strip()
+        buf = ""
+        if not line:
+            continue
+        m = _PCT_RE.search(line)
+        if m:
+            on_pct(max(0, min(100, int(m.group(1)))))
+        else:
+            tail.append(line)
+            if len(tail) > 40:
+                tail.pop(0)
+
+
 def _run_demucs_on_file(job: Job, source: Path, out_dir: Path, model: str, progress_offset: float) -> Path:
     """Run demucs on *source*, write output to *out_dir*, report progress
     scaled to the range [progress_offset, 1.0]."""
@@ -43,44 +69,29 @@ def _run_demucs_on_file(job: Job, source: Path, out_dir: Path, model: str, progr
     # Register immediately so a concurrent cancel can terminate the process.
     set_proc(job.id, proc)
 
-    buf = ""
-    tail: list[str] = []
     passes = _MODELS_IN_BAG.get(model, 1)
     pass_idx = 0
     last_pct = -1
+
+    def on_pct(pct: int) -> None:
+        nonlocal pass_idx, last_pct
+        if pct < last_pct:  # next model in the bag started
+            pass_idx = min(pass_idx + 1, passes - 1)
+        last_pct = pct
+        done = (pass_idx + pct / 100.0) / passes
+        _set(
+            job,
+            progress=progress_offset + done * (1.0 - progress_offset),
+            stage=f"Separating instruments {int(done * 100)}%",
+        )
+
     try:
         if proc.stderr is None:
             raise RuntimeError("demucs subprocess has no stderr pipe")
         # Cancel may have arrived in the window before registration above.
         if job.cancel_requested:
             proc.terminate()
-        while True:
-            ch = proc.stderr.read(1)
-            if not ch:
-                break
-            if ch in ("\r", "\n"):
-                line = buf.strip()
-                buf = ""
-                if not line:
-                    continue
-                m = _PCT_RE.search(line)
-                if m:
-                    pct = max(0, min(100, int(m.group(1))))
-                    if pct < last_pct:  # next model in the bag started
-                        pass_idx = min(pass_idx + 1, passes - 1)
-                    last_pct = pct
-                    done = (pass_idx + pct / 100.0) / passes
-                    _set(
-                        job,
-                        progress=progress_offset + done * (1.0 - progress_offset),
-                        stage=f"Separating instruments {int(done * 100)}%",
-                    )
-                else:
-                    tail.append(line)
-                    if len(tail) > 40:
-                        tail.pop(0)
-            else:
-                buf += ch
+        tail = _read_progress(proc.stderr, on_pct)
         proc.wait()
     finally:
         set_proc(job.id, None)
@@ -132,21 +143,30 @@ def separate(job: Job, source: Path, job_dir: Path) -> Path:
         "--output-dir", str(bsr_tmp),
         str(source),
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=0,
+    )
     # Register immediately so a concurrent cancel can terminate the process.
     set_proc(job.id, proc)
     try:
         # Cancel may have arrived in the window before registration above.
         if job.cancel_requested:
             proc.terminate()
-        stdout, stderr = proc.communicate()
+        # Stream stderr so the vocal stage (about half the run) shows progress
+        # instead of sitting at 0 %. stdout is one short JSON line at the end.
+        tail = _read_progress(
+            proc.stderr,
+            lambda pct: _set(job, progress=0.45 * pct / 100, stage=f"Separating vocals {pct}%"),
+        )
+        stdout = proc.stdout.read()
+        proc.wait()
     finally:
         set_proc(job.id, None)
 
     if job.cancel_requested:
         raise JobCancelled()
     if proc.returncode != 0:
-        detail = stderr.strip()[-500:] or "(no stderr)"
+        detail = "\n".join(tail[-15:]) or "(no stderr)"
         raise RuntimeError(f"audio-separator failed (exit {proc.returncode}): {detail}")
 
     try:
