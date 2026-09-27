@@ -178,7 +178,7 @@ async function probeJob(jobId) {
     throw new Error(`Job probe failed: ${r.status}`);
   }
   const s = await r.json();
-  applyState(s);
+  if (jobId === currentJobId) applyState(s);
   return s;
 }
 
@@ -189,11 +189,18 @@ function connectEvents(jobId) {
   let attempt = 0;
   let stopped = false;
 
+  // reset() (or a new job replacing this one) reassigns currentJobId --
+  // any continuation still closed over this jobId must check that it is
+  // still the live job before touching shared UI/eventSource state.
+  const isStale = () => stopped || jobId !== currentJobId;
+
   const open = () => {
+    if (isStale()) return;
     const es = new EventSource(`/api/jobs/${jobId}/events`);
     setEventSource(es);
 
     es.onmessage = (ev) => {
+      if (isStale()) { es.close(); return; }
       attempt = 0; // any successful frame resets backoff
       let s;
       try { s = JSON.parse(ev.data); } catch { return; }
@@ -206,7 +213,7 @@ function connectEvents(jobId) {
     };
 
     es.onerror = async () => {
-      if (stopped) return;
+      if (isStale()) return;
       es.close();
       setEventSource(null);
 
@@ -214,11 +221,13 @@ function connectEvents(jobId) {
       // reloads and brief network blips where the job is actually fine.
       try {
         const s = await probeJob(jobId);
+        if (isStale()) return;
         if (TERMINAL_STATUSES.has(s.status)) {
           stopped = true;
           return;
         }
       } catch (err) {
+        if (isStale()) return;
         if (err.message === "Job no longer exists on the server") {
           stopped = true;
           showError(err.message);
@@ -236,7 +245,7 @@ function connectEvents(jobId) {
       }
       // 0.5s, 1s, 2s, 4s, 8s, 16s
       const delay = 500 * Math.pow(2, attempt - 1);
-      setTimeout(() => { if (!stopped) open(); }, delay);
+      setTimeout(() => { if (!isStale()) open(); }, delay);
     };
   };
 
