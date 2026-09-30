@@ -1149,3 +1149,153 @@ def test_remix_above_unity_gain_is_not_clipped(client):
         assert peak > 2.5, f"remix was clipped: peak {peak:.3f} (expected ~3.2)"
     finally:
         shutil.rmtree(JOBS_DIR / job_id, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Reader-count / temp-file leak when the client disconnects before the first
+# body chunk is ever sent (generator never started).
+# ---------------------------------------------------------------------------
+#
+# uvicorn 0.46 reports asgi.spec_version "2.3" for HTTP scopes, so Starlette's
+# StreamingResponse.__call__ takes the task-group branch: it races
+# stream_response() against listen_for_disconnect() and cancels whichever
+# loses. For an already-disconnected client, receive() resolves to
+# http.disconnect immediately, so the task group can be cancelled before
+# iterate_in_threadpool ever calls next() on the sync generator. A generator
+# that never started never runs its try/finally on close or GC, so cleanup
+# that lives only in the generator's finally block never happens.
+#
+# These tests drive the real StreamingResponse.__call__ with a scope/receive
+# pair that reproduces exactly that race, instead of relying on TestClient
+# (which does not model this early-disconnect timing).
+
+
+def _disconnected_asgi():
+    """Return (scope, receive, send) simulating a client gone before the
+    first chunk -- spec_version "2.3" (uvicorn) and an immediate http.disconnect."""
+    scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}}
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    sent: list[dict] = []
+
+    async def send(message):
+        sent.append(message)
+
+    return scope, receive, send
+
+
+async def test_get_stem_dec_readers_when_client_disconnects_before_first_chunk():
+    """_readers must reach zero even if the client disconnects before the first
+    chunk is sent -- not just after streaming has started.
+
+    Bug: dec_readers lived only in the generator's try/finally. On an early
+    disconnect the task group can be cancelled before the generator's body
+    ever executes, so that finally never runs and _readers[job_id] leaks
+    forever -- claim_for_sweep can then never clean up the job.
+    """
+    from app.api import stems as stems_mod
+
+    job_id = "aabbccddee99"
+    job = Job(id=job_id)
+    job.status = "done"
+    _jobs[job_id] = job
+    path = _make_stem_file(job_id, "vocals", b"RIFF" + b"\x00" * 100_000)
+
+    try:
+        response = stems_mod.get_stem(job_id, "vocals")
+        scope, receive, send = _disconnected_asgi()
+        await response(scope, receive, send)
+
+        assert _readers.get(job_id, 0) == 0, (
+            f"_readers[{job_id!r}] = {_readers.get(job_id, 0)} after a client "
+            "that disconnected before the first chunk; expected 0."
+        )
+    finally:
+        _readers.pop(job_id, None)
+        path.unlink(missing_ok=True)
+        path.parent.rmdir()
+        path.parent.parent.rmdir()
+
+
+async def test_zip_dec_readers_when_client_disconnects_before_first_chunk():
+    """download_all_stems must not leak _readers on an early client disconnect."""
+    from app.api import stems as stems_mod
+
+    job_id = "aabbccddee9a"
+    paths = _setup_stems_job(job_id, {"vocals": b"RIFF" + b"\x00" * 44})
+
+    try:
+        response = stems_mod.download_all_stems(job_id)
+        scope, receive, send = _disconnected_asgi()
+        await response(scope, receive, send)
+
+        assert _readers.get(job_id, 0) == 0, (
+            f"_readers[{job_id!r}] = {_readers.get(job_id, 0)} after a client "
+            "that disconnected before the first chunk; expected 0."
+        )
+    finally:
+        _readers.pop(job_id, None)
+        _cleanup(paths)
+
+
+async def test_remix_dec_readers_and_unlinks_tempfile_on_early_disconnect(monkeypatch):
+    """download_remix must decrement _readers AND delete the temp WAV file even
+    if the client disconnects before the first chunk is sent.
+
+    This is the realistic case for remix.wav: ffmpeg can render for up to 300s
+    while the user closes the tab. Without a fix, every such abandoned remix
+    leaks a full float32 WAV mix (tens of MB) on disk forever, and the job's
+    reader count never returns to zero so DELETE /api/jobs/{id} 409s forever.
+    """
+    import os
+    import subprocess
+    import tempfile as tempfile_module
+
+    from app.api import stems as stems_mod
+
+    job_id = "aabbccddee9b"
+    job = Job(id=job_id, title="Early Disconnect Test")
+    job.status = "done"
+    _jobs[job_id] = job
+    paths = [_make_stem_file(job_id, "vocals", b"RIFF\x00\x00\x00\x00WAVE")]
+
+    created_paths: list[str] = []
+    _orig_mkstemp = tempfile_module.mkstemp
+
+    def spy_mkstemp(suffix="", prefix="tmp", dir=None, text=False):
+        fd, path = _orig_mkstemp(suffix=suffix, prefix=prefix, dir=dir, text=text)
+        created_paths.append(path)
+        return fd, path
+
+    monkeypatch.setattr(tempfile_module, "mkstemp", spy_mkstemp)
+    monkeypatch.setattr(
+        subprocess, "Popen",
+        _fake_popen_write_file(b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32),
+    )
+
+    try:
+        response = stems_mod.download_remix(job_id, stems="vocals", volumes="1.0", pitches="0")
+        assert created_paths, "download_remix must create a temp file for ffmpeg output"
+
+        scope, receive, send = _disconnected_asgi()
+        await response(scope, receive, send)
+
+        assert _readers.get(job_id, 0) == 0, (
+            f"_readers[{job_id!r}] = {_readers.get(job_id, 0)} after a client "
+            "that disconnected before the first chunk; expected 0."
+        )
+        for tmp_path in created_paths:
+            assert not os.path.exists(tmp_path), (
+                f"Temp WAV file {tmp_path!r} was not deleted after an early client "
+                "disconnect -- disk-space leak on every abandoned remix download."
+            )
+    finally:
+        for p in created_paths:
+            try:
+                os.unlink(p)
+            except FileNotFoundError:
+                pass
+        _readers.pop(job_id, None)
+        _cleanup(paths)

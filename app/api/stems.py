@@ -10,6 +10,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
+from starlette.background import BackgroundTask
 
 from app.core.config import JOB_ID_RE, JOBS_DIR, STEMS
 from app.core.registry import dec_readers, get as registry_get, inc_readers
@@ -17,6 +18,27 @@ from app.core.registry import dec_readers, get as registry_get, inc_readers
 router = APIRouter(tags=["stems"])
 
 _ALLOWED_NAMES = frozenset(STEMS)
+
+
+def _once(fn, *args, **kwargs):
+    """Wrap fn so only the first call actually runs it.
+
+    Needed because reader/temp-file cleanup must be reachable from two places
+    that must never both fire: the generator's own finally (runs once the
+    generator has actually started) and a StreamingResponse BackgroundTask
+    (guaranteed by Starlette to run after the response, even if the client
+    disconnected before the generator was ever advanced -- an unstarted sync
+    generator has no frame, so close()/GC never runs its finally).
+    """
+    ran = False
+
+    def _cleanup() -> None:
+        nonlocal ran
+        if not ran:
+            ran = True
+            fn(*args, **kwargs)
+
+    return _cleanup
 
 
 def _resolve_stem_path(job_id: str, name: str):
@@ -116,6 +138,7 @@ def get_stem(
     if parsed is not None:
         start, end = parsed
         length = end - start + 1
+        cleanup = _once(dec_readers, job_id)
 
         def generate_range():
             try:
@@ -129,12 +152,13 @@ def get_stem(
                         yield chunk
                         remaining -= len(chunk)
             finally:
-                dec_readers(job_id)
+                cleanup()
 
         return StreamingResponse(
             generate_range(),
             status_code=206,
             media_type="audio/wav",
+            background=BackgroundTask(cleanup),
             headers={
                 "content-length": str(length),
                 "content-range": f"bytes {start}-{end}/{size}",
@@ -143,17 +167,20 @@ def get_stem(
             },
         )
 
+    cleanup = _once(dec_readers, job_id)
+
     def generate():
         try:
             with open(path, "rb") as fh:
                 while chunk := fh.read(65536):
                     yield chunk
         finally:
-            dec_readers(job_id)
+            cleanup()
 
     return StreamingResponse(
         generate(),
         media_type="audio/wav",
+        background=BackgroundTask(cleanup),
         headers={
             "content-length": str(size),
             "accept-ranges": "bytes",
@@ -215,6 +242,8 @@ def download_all_stems(job_id: str) -> StreamingResponse:
         dec_readers(job_id)
         raise HTTPException(status_code=404, detail="no stems found")
 
+    cleanup = _once(dec_readers, job_id)
+
     def generate():
         try:
             buf = _StreamBuf()
@@ -234,7 +263,7 @@ def download_all_stems(job_id: str) -> StreamingResponse:
             if chunk:
                 yield chunk
         finally:
-            dec_readers(job_id)
+            cleanup()
 
     safe = (job.title or job_id).replace("/", "_").replace("\\", "_").replace('"', "")[:80]
     safe = safe.encode("latin-1", errors="replace").decode("latin-1").replace("?", "_")
@@ -242,6 +271,7 @@ def download_all_stems(job_id: str) -> StreamingResponse:
     return StreamingResponse(
         generate(),
         media_type="application/zip",
+        background=BackgroundTask(cleanup),
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
@@ -373,14 +403,19 @@ def download_remix(
             detail=f"ffmpeg: {stderr.decode(errors='replace')}",
         )
 
+    def _cleanup_remix() -> None:
+        dec_readers(job_id)
+        os.unlink(tmp_path)
+
+    cleanup = _once(_cleanup_remix)
+
     def generate():
         try:
             with open(tmp_path, "rb") as fh:
                 while chunk := fh.read(65536):
                     yield chunk
         finally:
-            dec_readers(job_id)
-            os.unlink(tmp_path)
+            cleanup()
 
     safe = (job.title or job_id).replace("/", "_").replace("\\", "_").replace('"', "")[:80]
     safe = safe.encode("latin-1", errors="replace").decode("latin-1").replace("?", "_")
@@ -389,5 +424,6 @@ def download_remix(
     return StreamingResponse(
         generate(),
         media_type="audio/wav",
+        background=BackgroundTask(cleanup),
         headers={"Content-Disposition": f'attachment; filename="{safe}_mix{suffix}.wav"'},
     )
