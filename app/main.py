@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api import jobs as jobs_api
 from app.api.router import router
 from app.core.config import BSROFORMER_MODEL, DEMUCS_DEVICE, JOBS_DIR, STATIC_DIR
 from app.core.persistence import load_all_jobs
@@ -39,6 +41,28 @@ async def no_cache_static(request: Request, call_next):
     if not request.url.path.startswith("/api"):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
+
+
+# FastAPI resolves `file: UploadFile = File(...)` by having Starlette spool the
+# *entire* multipart body to a temp file before the route handler ever runs --
+# Starlette's MultiPartParser only caps non-file fields (max_part_size), file
+# parts are written to disk unbounded. The handler's own MAX_UPLOAD_BYTES check
+# therefore only fires after the whole upload is already on disk. Reject here,
+# before routing/parsing starts, based on the client-declared Content-Length.
+@app.middleware("http")
+async def reject_oversized_uploads(request: Request, call_next):
+    if request.url.path == "/api/jobs/upload":
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                declared_size = int(content_length)
+            except ValueError:
+                declared_size = None
+            if declared_size is not None and declared_size > jobs_api.MAX_UPLOAD_BYTES:
+                return JSONResponse(
+                    {"detail": "Upload exceeds maximum allowed size"}, status_code=413
+                )
+    return await call_next(request)
 
 
 app.include_router(router, prefix="/api")

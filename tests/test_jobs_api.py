@@ -115,6 +115,30 @@ def test_upload_rejects_oversized_file(client_upload):
     assert r.status_code == 413
 
 
+def test_upload_rejects_oversized_content_length_before_spooling(client_upload):
+    """A request whose declared Content-Length exceeds MAX_UPLOAD_BYTES must be
+    rejected with 413 immediately -- before Starlette's multipart parser spools
+    the body to a temp file.
+
+    Without a pre-parse check, the only size check lives in create_job_from_upload's
+    read loop, which runs on `bytes_written` -- i.e. only after the *entire* file
+    part has already been spooled by Starlette's MultiPartParser (which enforces
+    no size limit on file parts, only on regular fields). A client that honestly
+    declares an oversized Content-Length but is slow to actually send that many
+    bytes would still have the whole thing spooled to disk first. Here the actual
+    body is tiny; only the declared Content-Length is oversized, so this must be
+    rejected purely on the strength of that header, proving the check runs before
+    any spooling takes place.
+    """
+    with patch("app.api.jobs.MAX_UPLOAD_BYTES", 100):
+        r = client_upload.post(
+            "/api/jobs/upload",
+            files={"file": ("test.mp3", b"small", "audio/mpeg")},
+            headers={"content-length": "999999999999"},
+        )
+    assert r.status_code == 413
+
+
 def test_url_job_limit_enforced(client):
     """After MAX_PENDING_JOBS pending jobs, POST /api/jobs must return 429."""
     with patch("app.api.jobs.MAX_PENDING_JOBS", 2, create=True):
